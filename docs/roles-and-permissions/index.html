@@ -9,25 +9,25 @@
       
       
       
-        <link rel="prev" href="../../oidc/">
+        <link rel="prev" href="../external-integration/">
       
       
-        <link rel="next" href="../sdks/">
+        <link rel="next" href="../oidc/">
       
       
-      <link rel="icon" href="../../images/favicon.png">
+      <link rel="icon" href="../images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
     
     
       
-        <title>Introduction - listmonk / Documentation</title>
+        <title>User roles and permissions - listmonk / Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.84d31ad4.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.84d31ad4.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -46,9 +46,9 @@
       
     
     
-      <link rel="stylesheet" href="../../static/style.css">
+      <link rel="stylesheet" href="../static/style.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#apis" class="md-skip">
+        <a href="#user-roles" class="md-skip">
           Skip to content
         </a>
       
@@ -88,9 +88,9 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="listmonk / Documentation" class="md-header__button md-logo" aria-label="listmonk / Documentation" data-md-component="logo">
+    <a href=".." title="listmonk / Documentation" class="md-header__button md-logo" aria-label="listmonk / Documentation" data-md-component="logo">
       
-  <img src="../../images/favicon.png" alt="logo">
+  <img src="../images/favicon.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -107,7 +107,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Introduction
+              User roles and permissions
             
           </span>
         </div>
@@ -185,9 +185,9 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="listmonk / Documentation" class="md-nav__button md-logo" aria-label="listmonk / Documentation" data-md-component="logo">
+    <a href=".." title="listmonk / Documentation" class="md-nav__button md-logo" aria-label="listmonk / Documentation" data-md-component="logo">
       
-  <img src="../../images/favicon.png" alt="logo">
+  <img src="../images/favicon.png" alt="logo">
 
     </a>
     listmonk / Documentation
@@ -202,7 +202,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -275,7 +275,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../installation/" class="md-nav__link">
+      <a href="../installation/" class="md-nav__link">
         
   
   
@@ -298,7 +298,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../configuration/" class="md-nav__link">
+      <a href="../configuration/" class="md-nav__link">
         
   
   
@@ -321,314 +321,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../upgrade/" class="md-nav__link">
+      <a href="../upgrade/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     Upgrade
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    Using listmonk
-    
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_3">
-            <span class="md-nav__icon md-icon"></span>
-            Using listmonk
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../concepts/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Concepts
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../templating/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Templating
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../querying-and-segmentation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Querying and segmenting subscribers
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../bounces/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Bounce processing
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../messengers/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Messengers
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../archives/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Archives
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../i18n/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Internationalization
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../external-integration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Integrating with external systems
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../roles-and-permissions/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    User roles and permissions
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../oidc/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    OIDC SSO
     
   </span>
   
@@ -690,15 +388,15 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
-    API
+    Using listmonk
     
   </span>
   
@@ -706,12 +404,196 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
-            API
+            Using listmonk
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Concepts
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../templating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Templating
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../querying-and-segmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Querying and segmenting subscribers
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bounces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Bounce processing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../messengers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Messengers
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../archives/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Archives
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../i18n/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Internationalization
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../external-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Integrating with external systems
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -726,15 +608,13 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
-        
-      
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
           
   
   
   <span class="md-ellipsis">
-    Introduction
+    User roles and permissions
     
   </span>
   
@@ -747,7 +627,7 @@
   
   
   <span class="md-ellipsis">
-    Introduction
+    User roles and permissions
     
   </span>
   
@@ -760,8 +640,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -770,102 +648,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#auth" class="md-nav__link">
+  <a href="#user-roles" class="md-nav__link">
     <span class="md-ellipsis">
-      Auth
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Auth">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basicauth-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      BasicAuth example
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#authorization-token-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authorization token example
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Permissions
+      User roles
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#response-structure" class="md-nav__link">
+  <a href="#list-roles" class="md-nav__link">
     <span class="md-ellipsis">
-      Response structure
+      List roles
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Response structure">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#successful-request" class="md-nav__link">
-    <span class="md-ellipsis">
-      Successful request
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#failed-request" class="md-nav__link">
-    <span class="md-ellipsis">
-      Failed request
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timestamps" class="md-nav__link">
-    <span class="md-ellipsis">
-      Timestamps
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#common-http-error-codes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common HTTP error codes
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#openapi-swagger-spec" class="md-nav__link">
+  <a href="#api-users" class="md-nav__link">
     <span class="md-ellipsis">
-      OpenAPI (Swagger) spec
+      API users
     </span>
   </a>
   
@@ -887,7 +690,125 @@
   
   
     <li class="md-nav__item">
-      <a href="../sdks/" class="md-nav__link">
+      <a href="../oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OIDC SSO
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    API
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apis/apis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Introduction
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apis/sdks/" class="md-nav__link">
         
   
   
@@ -910,7 +831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../subscribers/" class="md-nav__link">
+      <a href="../apis/subscribers/" class="md-nav__link">
         
   
   
@@ -933,7 +854,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../lists/" class="md-nav__link">
+      <a href="../apis/lists/" class="md-nav__link">
         
   
   
@@ -956,7 +877,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../import/" class="md-nav__link">
+      <a href="../apis/import/" class="md-nav__link">
         
   
   
@@ -979,7 +900,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../campaigns/" class="md-nav__link">
+      <a href="../apis/campaigns/" class="md-nav__link">
         
   
   
@@ -1002,7 +923,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../media/" class="md-nav__link">
+      <a href="../apis/media/" class="md-nav__link">
         
   
   
@@ -1025,7 +946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../templates/" class="md-nav__link">
+      <a href="../apis/templates/" class="md-nav__link">
         
   
   
@@ -1048,7 +969,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../transactional/" class="md-nav__link">
+      <a href="../apis/transactional/" class="md-nav__link">
         
   
   
@@ -1071,7 +992,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../bounces/" class="md-nav__link">
+      <a href="../apis/bounces/" class="md-nav__link">
         
   
   
@@ -1148,7 +1069,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../maintenance/performance/" class="md-nav__link">
+      <a href="../maintenance/performance/" class="md-nav__link">
         
   
   
@@ -1225,7 +1146,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-setup/" class="md-nav__link">
+      <a href="../developer-setup/" class="md-nav__link">
         
   
   
@@ -1265,8 +1186,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1275,102 +1194,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#auth" class="md-nav__link">
+  <a href="#user-roles" class="md-nav__link">
     <span class="md-ellipsis">
-      Auth
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Auth">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basicauth-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      BasicAuth example
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#authorization-token-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authorization token example
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#permissions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Permissions
+      User roles
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#response-structure" class="md-nav__link">
+  <a href="#list-roles" class="md-nav__link">
     <span class="md-ellipsis">
-      Response structure
+      List roles
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Response structure">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#successful-request" class="md-nav__link">
-    <span class="md-ellipsis">
-      Successful request
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#failed-request" class="md-nav__link">
-    <span class="md-ellipsis">
-      Failed request
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timestamps" class="md-nav__link">
-    <span class="md-ellipsis">
-      Timestamps
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#common-http-error-codes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common HTTP error codes
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#openapi-swagger-spec" class="md-nav__link">
+  <a href="#api-users" class="md-nav__link">
     <span class="md-ellipsis">
-      OpenAPI (Swagger) spec
+      API users
     </span>
   </a>
   
@@ -1392,104 +1236,156 @@
 
 
 
-<h1 id="apis">APIs<a class="headerlink" href="#apis" title="Permanent link">&para;</a></h1>
-<p>All features that are available on the listmonk dashboard are also available as REST-like HTTP APIs that can be interacted with directly. Request and response bodies are JSON. This allows easy scripting of listmonk and integration with other systems, for instance, synchronisation with external subscriber databases.</p>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>If you come across API calls that are yet to be documented, please consider contributing to docs.</p>
-</div>
-<h2 id="auth">Auth<a class="headerlink" href="#auth" title="Permanent link">&para;</a></h2>
-<p>HTTP API requests support BasicAuth and a Authorization <code>token</code> headers. API users and tokens with the required permissions can be created and managed on the admin UI (Admin -&gt; Users).</p>
-<h5 id="basicauth-example">BasicAuth example<a class="headerlink" href="#basicauth-example" title="Permanent link">&para;</a></h5>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-u<span class="w"> </span><span class="s2">&quot;api_user:token&quot;</span><span class="w"> </span>http://localhost:9000/api/lists
-</code></pre></div>
-<h5 id="authorization-token-example">Authorization token example<a class="headerlink" href="#authorization-token-example" title="Permanent link">&para;</a></h5>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: token api_user:token&quot;</span><span class="w"> </span>http://localhost:9000/api/lists
-</code></pre></div>
-<h2 id="permissions">Permissions<a class="headerlink" href="#permissions" title="Permanent link">&para;</a></h2>
-<p><strong>User role</strong>: Permissions allowed for a user are defined as a <em>User role</em> (Admin -&gt; User roles) and then attached to a user. </p>
-<p><strong>List role</strong>: Read / write permissions per-list can be defined as a <em>List role</em> (Admin -&gt; User roles) and then attached to a user. </p>
-<p>In a <em>User role</em>, <code>lists:get_all</code> or <code>lists:manage_all</code> permission supercede and override any list specific permissions for a user defined in a <em>List role</em>.</p>
-<p>To manage lists and subscriber list subscriptions via API requests, ensure that the appropriate permissions are attached to the API user.</p>
-<hr />
-<h2 id="response-structure">Response structure<a class="headerlink" href="#response-structure" title="Permanent link">&para;</a></h2>
-<h3 id="successful-request">Successful request<a class="headerlink" href="#successful-request" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">200</span> <span class="ne">OK</span>
-<span class="na">Content-Type</span><span class="o">:</span> <span class="l">application/json</span>
+  <h1>User roles and permissions</h1>
 
-<span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{}</span>
-<span class="p">}</span>
-</code></pre></div>
-<p>All responses from the API server are JSON with the content-type application/json unless explicitly stated otherwise. A successful 200 OK response always has a JSON response body with a status key with the value success. The data key contains the full response payload.</p>
-<h3 id="failed-request">Failed request<a class="headerlink" href="#failed-request" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">500</span> <span class="ne">Server error</span>
-<span class="na">Content-Type</span><span class="o">:</span> <span class="l">application/json</span>
-
-<span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Error message&quot;</span>
-<span class="p">}</span>
-</code></pre></div>
-<p>A failure response is preceded by the corresponding 40x or 50x HTTP header. There may be an optional <code>data</code> key with additional payload.</p>
-<h3 id="timestamps">Timestamps<a class="headerlink" href="#timestamps" title="Permanent link">&para;</a></h3>
-<p>All timestamp fields are in the format <code>2019-01-01T09:00:00.000000+05:30</code>. The seconds component is suffixed by the milliseconds, followed by the <code>+</code> and the timezone offset.</p>
-<h3 id="common-http-error-codes">Common HTTP error codes<a class="headerlink" href="#common-http-error-codes" title="Permanent link">&para;</a></h3>
+<p>listmonk supports (&gt;= v4.0.0) creating systems users with granular permissions to various features, including list-specific permissions. Users can login with a username and password, or via an OIDC (OpenID Connect) handshake if an auth provider is connected. Various permissions can be grouped into "user roles", which can be assigned to users. List-specific permissions can be grouped into "list roles".</p>
+<h2 id="user-roles">User roles<a class="headerlink" href="#user-roles" title="Permanent link">&para;</a></h2>
+<p>A user role is a collection of user related permissions. User roles are attached to user accounts. User roles can be managed in <code>Admin -&gt; Users -&gt; User roles</code> The permissions are described below.</p>
 <table>
 <thead>
 <tr>
-<th>Code</th>
-<th></th>
+<th>Group</th>
+<th>Permission</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>400</td>
-<td>Missing or bad request parameters or values</td>
+<td>lists</td>
+<td>lists:get_all</td>
+<td>Get details of all lists</td>
 </tr>
 <tr>
-<td>403</td>
-<td>Session expired or invalidate. Must relogin</td>
+<td></td>
+<td>lists:manage_all</td>
+<td>Create, update, and delete all lists</td>
 </tr>
 <tr>
-<td>404</td>
-<td>Request resource was not found</td>
+<td>subscribers</td>
+<td>subscribers:get</td>
+<td>Get individual subscriber details</td>
 </tr>
 <tr>
-<td>405</td>
-<td>Request method (GET, POST etc.) is not allowed on the requested endpoint</td>
+<td></td>
+<td>subscribers:get_all</td>
+<td>Get all subscribers and their details</td>
 </tr>
 <tr>
-<td>410</td>
-<td>The requested resource is gone permanently</td>
+<td></td>
+<td>subscribers:manage</td>
+<td>Add, update, and delete subscribers</td>
 </tr>
 <tr>
-<td>422</td>
-<td>Unprocessable entity. Unable to process request as it contains invalid data</td>
+<td></td>
+<td>subscribers:import</td>
+<td>Import subscribers from external files</td>
 </tr>
 <tr>
-<td>429</td>
-<td>Too many requests to the API (rate limiting)</td>
+<td></td>
+<td>subscribers:sql_query</td>
+<td>Run raw SQL queries on subscriber data. <strong>WARNING:</strong> This permission allows execution of arbitrary SQL expressions and SQL functions. While it is a readonly feature designed to allow querying of all lists and subscribers directly from the database superceding individual list and subscriber permissions above, raw SQL expressions makes it possible to obtain Postgres database configuration such as version and paths. Give this permission only to trusted users.</td>
 </tr>
 <tr>
-<td>500</td>
-<td>Something unexpected went wrong</td>
+<td></td>
+<td>tx:send</td>
+<td>Send transactional messages to subscribers</td>
 </tr>
 <tr>
-<td>502</td>
-<td>The backend OMS is down and the API is unable to communicate with it</td>
+<td>campaigns</td>
+<td>campaigns:get</td>
+<td>Get and view campaigns belonging to permitted lists</td>
 </tr>
 <tr>
-<td>503</td>
-<td>Service unavailable; the API is down</td>
+<td></td>
+<td>campaigns:get_all</td>
+<td>Get and view campaigns across all lists</td>
 </tr>
 <tr>
-<td>504</td>
-<td>Gateway timeout; the API is unreachable</td>
+<td></td>
+<td>campaigns:get_analytics</td>
+<td>Access campaign performance metrics</td>
+</tr>
+<tr>
+<td></td>
+<td>campaigns:manage</td>
+<td>Create, update, and delete campaigns</td>
+</tr>
+<tr>
+<td>bounces</td>
+<td>bounces:get</td>
+<td>Get email bounce records</td>
+</tr>
+<tr>
+<td></td>
+<td>bounces:manage</td>
+<td>Process and handle bounced emails</td>
+</tr>
+<tr>
+<td></td>
+<td>webhooks:post_bounce</td>
+<td>Receive bounce notifications via webhook</td>
+</tr>
+<tr>
+<td>media</td>
+<td>media:get</td>
+<td>Get uploaded media files</td>
+</tr>
+<tr>
+<td></td>
+<td>media:manage</td>
+<td>Upload, update, and delete media</td>
+</tr>
+<tr>
+<td>templates</td>
+<td>templates:get</td>
+<td>Get email templates</td>
+</tr>
+<tr>
+<td></td>
+<td>templates:manage</td>
+<td>Create, update, and delete templates</td>
+</tr>
+<tr>
+<td>users</td>
+<td>users:get</td>
+<td>Get system user accounts</td>
+</tr>
+<tr>
+<td></td>
+<td>users:manage</td>
+<td>Create, update, and delete user accounts</td>
+</tr>
+<tr>
+<td></td>
+<td>roles:get</td>
+<td>Get user roles and permissions</td>
+</tr>
+<tr>
+<td></td>
+<td>roles:manage</td>
+<td>Create and modify user roles</td>
+</tr>
+<tr>
+<td>settings</td>
+<td>settings:get</td>
+<td>Get system settings</td>
+</tr>
+<tr>
+<td></td>
+<td>settings:manage</td>
+<td>Modify system configuration</td>
+</tr>
+<tr>
+<td></td>
+<td>settings:maintain</td>
+<td>Perform system maintenance tasks</td>
 </tr>
 </tbody>
 </table>
-<h2 id="openapi-swagger-spec">OpenAPI (Swagger) spec<a class="headerlink" href="#openapi-swagger-spec" title="Permanent link">&para;</a></h2>
-<p>The auto-generated OpenAPI (Swagger) specification site for the APIs are available at <a href="https://listmonk.app/docs/swagger/"><strong>listmonk.app/docs/swagger</strong></a></p>
+<h2 id="list-roles">List roles<a class="headerlink" href="#list-roles" title="Permanent link">&para;</a></h2>
+<p>A list role is a collection of permissions assigned per list. Each list can be assigned a view (read) or manage (update) permission. List roles are attached to user accounts. Only the lists defined in a list role is accessible by the user, be it on the admin UI or via API calls. Do note that the <code>lists:get_all</code> and <code>lists:manage_all</code> permissions in user roles override all per-list permissions.</p>
+<h2 id="api-users">API users<a class="headerlink" href="#api-users" title="Permanent link">&para;</a></h2>
+<p>A user account can be of two types, a regular user or an API user. API users are meant for intertacting with the listmonk APIs programmatically. Unlike regular user accounts that have custom passwords or OIDC for authentication, API users get an automatically generated secret token.</p>
 
 
 
@@ -1542,10 +1438,10 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.indexes", "navigation.sections", "content.code.copy"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["navigation.indexes", "navigation.sections", "content.code.copy"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      <script src="../assets/javascripts/bundle.f55a23d4.min.js"></script>
       
     
   </body>
