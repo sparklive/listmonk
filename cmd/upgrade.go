@@ -40,6 +40,8 @@ var migList = []migFunc{
 	{"v3.0.0", migrations.V3_0_0},
 	{"v4.0.0", migrations.V4_0_0},
 	{"v4.1.0", migrations.V4_1_0},
+	{"v5.0.0", migrations.V5_0_0},
+	{"v5.1.0", migrations.V5_1_0},
 }
 
 // upgrade upgrades the database to the current version by running SQL migration files
@@ -114,7 +116,7 @@ func checkUpgrade(db *sqlx.DB) {
 // getPendingMigrations gets the pending migrations by comparing the last
 // recorded migration in the DB against all migrations listed in `migrations`.
 func getPendingMigrations(db *sqlx.DB) (string, []migFunc, error) {
-	lastVer, err := getLastMigrationVersion()
+	lastVer, err := getLastMigrationVersion(db)
 	if err != nil {
 		return "", nil, err
 	}
@@ -134,7 +136,7 @@ func getPendingMigrations(db *sqlx.DB) (string, []migFunc, error) {
 
 // getLastMigrationVersion returns the last migration semver recorded in the DB.
 // If there isn't any, `v0.0.0` is returned.
-func getLastMigrationVersion() (string, error) {
+func getLastMigrationVersion(db *sqlx.DB) (string, error) {
 	var v string
 	if err := db.Get(&v, `
 		SELECT COALESCE(

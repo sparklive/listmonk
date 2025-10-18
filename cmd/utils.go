@@ -1,14 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rand"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 var (
@@ -17,12 +17,7 @@ var (
 
 // inArray checks if a string is present in a list of strings.
 func inArray(val string, vals []string) (ok bool) {
-	for _, v := range vals {
-		if v == val {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(vals, val)
 }
 
 // makeFilename sanitizes a filename (user supplied upload filenames).
@@ -98,35 +93,22 @@ func strHasLen(str string, min, max int) bool {
 	return len(str) >= min && len(str) <= max
 }
 
-// strSliceContains checks if a string is present in the string slice.
-func strSliceContains(str string, sl []string) bool {
-	for _, s := range sl {
-		if s == str {
-			return true
+// getQueryInts parses the list of given query param values into ints.
+func getQueryInts(param string, qp url.Values) ([]int, error) {
+	var out []int
+	if vals, ok := qp[param]; ok {
+		for _, v := range vals {
+			if v == "" {
+				continue
+			}
+
+			listID, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, listID)
 		}
 	}
 
-	return false
-}
-
-func trimNullBytes(b []byte) string {
-	return string(bytes.Trim(b, "\x00"))
-}
-
-func titleCase(input string) string {
-	parts := strings.Fields(input)
-	for n, p := range parts {
-		parts[n] = strings.Title(p)
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func isASCII(s string) bool {
-	for _, c := range s {
-		if c > unicode.MaxASCII {
-			return false
-		}
-	}
-	return true
+	return out, nil
 }

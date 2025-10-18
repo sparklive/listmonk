@@ -13,19 +13,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knadh/listmonk/internal/auth"
+	"github.com/knadh/listmonk/internal/notifs"
 	"github.com/knadh/listmonk/models"
 	"github.com/labstack/echo/v4"
 	"github.com/lib/pq"
 	"gopkg.in/volatiletech/null.v6"
 )
 
-// campaignReq is a wrapper over the Campaign model for receiving
+// campReq is a wrapper over the Campaign model for receiving
 // campaign creation and update data from APIs.
-type campaignReq struct {
+type campReq struct {
 	models.Campaign
-
-	// Indicates if the "send_at" date should be written or set to null.
-	SendLater bool `json:"send_later"`
 
 	// This overrides Campaign.Lists to receive and
 	// write a list of int IDs during creation and updation.
@@ -39,24 +38,37 @@ type campaignReq struct {
 	SubscriberEmails pq.StringArray `json:"subscribers"`
 }
 
-// campaignContentReq wraps params coming from API requests for converting
+// campContentReq wraps params coming from API requests for converting
 // campaign content formats.
-type campaignContentReq struct {
+type campContentReq struct {
 	models.Campaign
 	From string `json:"from"`
 	To   string `json:"to"`
 }
 
 var (
-	regexFromAddress = regexp.MustCompile(`((.+?)\s)?<(.+?)@(.+?)>`)
-	regexSlug        = regexp.MustCompile(`[^\p{L}\p{M}\p{N}]`)
+	reFromAddress = regexp.MustCompile(`((.+?)\s)?<(.+?)@(.+?)>`)
+	reSlug        = regexp.MustCompile(`[^\p{L}\p{M}\p{N}]`)
 )
 
-// handleGetCampaigns handles retrieval of campaigns.
-func handleGetCampaigns(c echo.Context) error {
+// GetCampaigns handles retrieval of campaigns.
+func (a *App) GetCampaigns(c echo.Context) error {
+	// Get the authenticated user.
+	user := auth.GetUser(c)
+
 	var (
-		app = c.Get("app").(*App)
-		pg  = app.paginator.NewFromURL(c.Request().URL.Query())
+		hasAllPerm     = user.HasPerm(auth.PermCampaignsGetAll)
+		permittedLists []int
+	)
+
+	if !hasAllPerm {
+		// Either the user has campaigns:get_all permissions and can view all campaigns,
+		// or the campaigns are filtered by the lists the user has get|manage access to.
+		hasAllPerm, permittedLists = user.GetPermittedLists(auth.PermTypeGet | auth.PermTypeManage)
+	}
+
+	var (
+		pg = a.pg.NewFromURL(c.Request().URL.Query())
 
 		status    = c.QueryParams()["status"]
 		tags      = c.QueryParams()["tag"]
@@ -66,46 +78,54 @@ func handleGetCampaigns(c echo.Context) error {
 		noBody, _ = strconv.ParseBool(c.QueryParam("no_body"))
 	)
 
-	res, total, err := app.core.QueryCampaigns(query, status, tags, orderBy, order, pg.Offset, pg.Limit)
+	// Query and retrieve campaigns from the DB.
+	res, total, err := a.core.QueryCampaigns(query, status, tags, orderBy, order, hasAllPerm, permittedLists, pg.Offset, pg.Limit)
 	if err != nil {
 		return err
 	}
 
+	// Remove the body from the response if requested.
 	if noBody {
-		for i := 0; i < len(res); i++ {
+		for i := range res {
 			res[i].Body = ""
+			res[i].BodySource.Valid = false
 		}
 	}
 
-	var out models.PageResults
+	// Paginate the response.
 	if len(res) == 0 {
-		out.Results = []models.Campaign{}
-		return c.JSON(http.StatusOK, okResp{out})
+		return c.JSON(http.StatusOK, okResp{models.PageResults{Results: []models.Campaign{}}})
 	}
 
-	// Meta.
-	out.Query = query
-	out.Results = res
-	out.Total = total
-	out.Page = pg.Page
-	out.PerPage = pg.PerPage
+	out := models.PageResults{
+		Query:   query,
+		Results: res,
+		Total:   total,
+		Page:    pg.Page,
+		PerPage: pg.PerPage,
+	}
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleGetCampaign handles retrieval of campaigns.
-func handleGetCampaign(c echo.Context) error {
-	var (
-		app       = c.Get("app").(*App)
-		id, _     = strconv.Atoi(c.Param("id"))
-		noBody, _ = strconv.ParseBool(c.QueryParam("no_body"))
-	)
+// GetCampaign handles retrieval of campaigns.
+func (a *App) GetCampaign(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	out, err := app.core.GetCampaign(id, "", "")
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeGet, id, c); err != nil {
+		return err
+	}
+
+	// Get the campaign from the DB.
+	out, err := a.core.GetCampaign(id, "", "")
 	if err != nil {
 		return err
 	}
 
+	// Blank out the body if requested.
+	noBody, _ := strconv.ParseBool(c.QueryParam("no_body"))
 	if noBody {
 		out.Body = ""
 	}
@@ -113,46 +133,61 @@ func handleGetCampaign(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handlePreviewCampaign renders the HTML preview of a campaign body.
-func handlePreviewCampaign(c echo.Context) error {
-	var (
-		app      = c.Get("app").(*App)
-		id, _    = strconv.Atoi(c.Param("id"))
-		tplID, _ = strconv.Atoi(c.FormValue("template_id"))
-	)
+// PreviewCampaign renders the HTML preview of a campaign body.
+func (a *App) PreviewCampaign(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	if id < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeGet, id, c); err != nil {
+		return err
 	}
 
-	camp, err := app.core.GetCampaignForPreview(id, tplID)
+	var (
+		isPost      = c.Request().Method == http.MethodPost
+		contentType = c.FormValue("content_type")
+		tplID, _    = strconv.Atoi(c.FormValue("template_id"))
+	)
+	// For visual content, template ID for previewing is irrelevant.
+	if contentType == models.CampaignContentTypeVisual || tplID < 1 {
+		tplID = 0
+	}
+
+	// Get the campaign from the DB for previewing with the `template_body` field.
+	camp, err := a.core.GetCampaignForPreview(id, tplID)
 	if err != nil {
 		return err
 	}
 
 	// There's a body in the request to preview instead of the body in the DB.
-	if c.Request().Method == http.MethodPost {
-		camp.ContentType = c.FormValue("content_type")
+	if isPost {
+		camp.ContentType = contentType
 		camp.Body = c.FormValue("body")
+
+		// For visual campaigns, template body from the DB shouldn't be used.
+		if contentType == models.CampaignContentTypeVisual {
+			camp.TemplateBody = ""
+		}
 	}
 
 	// Use a dummy campaign ID to prevent views and clicks from {{ TrackView }}
 	// and {{ TrackLink }} being registered on preview.
 	camp.UUID = dummySubscriber.UUID
-	if err := camp.CompileTemplate(app.manager.TemplateFuncs(&camp)); err != nil {
-		app.log.Printf("error compiling template: %v", err)
+	if err := camp.CompileTemplate(a.manager.TemplateFuncs(&camp)); err != nil {
+		a.log.Printf("error compiling template: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest,
-			app.i18n.Ts("templates.errorCompiling", "error", err.Error()))
+			a.i18n.Ts("templates.errorCompiling", "error", err.Error()))
 	}
 
 	// Render the message body.
-	msg, err := app.manager.NewCampaignMessage(&camp, dummySubscriber)
+	msg, err := a.manager.NewCampaignMessage(&camp, dummySubscriber)
 	if err != nil {
-		app.log.Printf("error rendering message: %v", err)
+		a.log.Printf("error rendering message: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest,
-			app.i18n.Ts("templates.errorRendering", "error", err.Error()))
+			a.i18n.Ts("templates.errorRendering", "error", err.Error()))
 	}
 
+	// Plaintext headers for plain body.
 	if camp.ContentType == models.CampaignContentTypePlain {
 		return c.String(http.StatusOK, string(msg.Body()))
 	}
@@ -160,22 +195,52 @@ func handlePreviewCampaign(c echo.Context) error {
 	return c.HTML(http.StatusOK, string(msg.Body()))
 }
 
-// handleCampaignContent handles campaign content (body) format conversions.
-func handleCampaignContent(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+// PreviewCampaignArchive renders the public campaign archives page.
+func (a *App) PreviewCampaignArchive(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	if id < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeGet, id, c); err != nil {
+		return err
 	}
 
-	var camp campaignContentReq
+	// Fetch the campaign body from the DB.
+	tplID, _ := strconv.Atoi(c.FormValue("template_id"))
+	camp, err := a.core.GetCampaignForPreview(id, tplID)
+	if err != nil {
+		return err
+	}
+
+	camp.ArchiveMeta = json.RawMessage([]byte(c.FormValue("archive_meta")))
+
+	// "Compile" the campaign template with appropriate data.
+	res, err := a.compileArchiveCampaigns([]models.Campaign{camp})
+	if err != nil {
+		return c.Render(http.StatusInternalServerError, tplMessage,
+			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorFetchingCampaign")))
+	}
+
+	// Render the campaign body.
+	out := res[0].Campaign
+	msg, err := a.manager.NewCampaignMessage(out, res[0].Subscriber)
+	if err != nil {
+		a.log.Printf("error rendering campaign: %v", err)
+		return c.Render(http.StatusInternalServerError, tplMessage,
+			makeMsgTpl(a.i18n.T("public.errorTitle"), "", a.i18n.Ts("public.errorFetchingCampaign")))
+	}
+
+	return c.HTML(http.StatusOK, string(msg.Body()))
+}
+
+// CampaignContent handles campaign content (body) format conversions.
+func (a *App) CampaignContent(c echo.Context) error {
+	var camp campContentReq
 	if err := c.Bind(&camp); err != nil {
 		return err
 	}
 
+	// Convert formats, eg: markdown to HTML.
 	out, err := camp.ConvertContent(camp.From, camp.To)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -184,21 +249,17 @@ func handleCampaignContent(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleCreateCampaign handles campaign creation.
+// CreateCampaign handles campaign creation.
 // Newly created campaigns are always drafts.
-func handleCreateCampaign(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-		o   campaignReq
-	)
-
+func (a *App) CreateCampaign(c echo.Context) error {
+	var o campReq
 	if err := c.Bind(&o); err != nil {
 		return err
 	}
 
 	// If the campaign's 'opt-in', prepare a default message.
 	if o.Type == models.CampaignTypeOptin {
-		op, err := makeOptinCampaignMessage(o, app)
+		op, err := a.makeOptinCampaignMessage(o)
 		if err != nil {
 			return err
 		}
@@ -207,25 +268,22 @@ func handleCreateCampaign(c echo.Context) error {
 		o.Type = models.CampaignTypeRegular
 	}
 
-	if o.ContentType == "" {
-		o.ContentType = models.CampaignContentTypeRichtext
-	}
 	if o.Messenger == "" {
 		o.Messenger = "email"
 	}
 
 	// Validate.
-	if c, err := validateCampaignFields(o, app); err != nil {
+	if c, err := a.validateCampaignFields(o); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	} else {
 		o = c
 	}
 
-	if o.ArchiveTemplateID == 0 {
+	if o.ArchiveTemplateID.Valid && o.ArchiveTemplateID.Int != 0 {
 		o.ArchiveTemplateID = o.TemplateID
 	}
 
-	out, err := app.core.CreateCampaign(o.Campaign, o.ListIDs, o.MediaIDs)
+	out, err := a.core.CreateCampaign(o.Campaign, o.ListIDs, o.MediaIDs)
 	if err != nil {
 		return err
 	}
@@ -233,43 +291,42 @@ func handleCreateCampaign(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleUpdateCampaign handles campaign modification.
+// UpdateCampaign handles campaign modification.
 // Campaigns that are done cannot be modified.
-func handleUpdateCampaign(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+func (a *App) UpdateCampaign(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	if id < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
-
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeManage, id, c); err != nil {
+		return err
 	}
 
-	cm, err := app.core.GetCampaign(id, "", "")
+	// Retrieve the campaign from the DB.
+	cm, err := a.core.GetCampaign(id, "", "")
 	if err != nil {
 		return err
 	}
 
-	if isCampaignalMutable(cm.Status) {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("campaigns.cantUpdate"))
+	if !canEditCampaign(cm.Status) {
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("campaigns.cantUpdate"))
 	}
 
 	// Read the incoming params into the existing campaign fields from the DB.
 	// This allows updating of values that have been sent whereas fields
 	// that are not in the request retain the old values.
-	o := campaignReq{Campaign: cm}
+	o := campReq{Campaign: cm}
 	if err := c.Bind(&o); err != nil {
 		return err
 	}
 
-	if c, err := validateCampaignFields(o, app); err != nil {
+	if c, err := a.validateCampaignFields(o); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	} else {
 		o = c
 	}
 
-	out, err := app.core.UpdateCampaign(id, o.Campaign, o.ListIDs, o.MediaIDs, o.SendLater)
+	out, err := a.core.UpdateCampaign(id, o.Campaign, o.ListIDs, o.MediaIDs)
 	if err != nil {
 		return err
 	}
@@ -277,43 +334,45 @@ func handleUpdateCampaign(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleUpdateCampaignStatus handles campaign status modification.
-func handleUpdateCampaignStatus(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+// UpdateCampaignStatus handles campaign status modification.
+func (a *App) UpdateCampaignStatus(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	if id < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeManage, id, c); err != nil {
+		return err
 	}
 
-	var o struct {
+	req := struct {
 		Status string `json:"status"`
-	}
-
-	if err := c.Bind(&o); err != nil {
+	}{}
+	if err := c.Bind(&req); err != nil {
 		return err
 	}
 
-	out, err := app.core.UpdateCampaignStatus(id, o.Status)
+	// Update the campaign status in the DB.
+	out, err := a.core.UpdateCampaignStatus(id, req.Status)
 	if err != nil {
 		return err
 	}
 
-	if o.Status == models.CampaignStatusPaused || o.Status == models.CampaignStatusCancelled {
-		app.manager.StopCampaign(id)
+	// If the campaign is being stopped, send the signal to the manager to stop it in flight.
+	if req.Status == models.CampaignStatusPaused || req.Status == models.CampaignStatusCancelled {
+		a.manager.StopCampaign(id)
 	}
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleUpdateCampaignArchive handles campaign status modification.
-func handleUpdateCampaignArchive(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+// UpdateCampaignArchive handles campaign status modification.
+func (a *App) UpdateCampaignArchive(c echo.Context) error {
+	id := getID(c)
+
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeManage, id, c); err != nil {
+		return err
+	}
 
 	req := struct {
 		Archive     bool        `json:"archive"`
@@ -321,8 +380,6 @@ func handleUpdateCampaignArchive(c echo.Context) error {
 		Meta        models.JSON `json:"archive_meta"`
 		ArchiveSlug string      `json:"archive_slug"`
 	}{}
-
-	// Get and validate fields.
 	if err := c.Bind(&req); err != nil {
 		return err
 	}
@@ -330,44 +387,41 @@ func handleUpdateCampaignArchive(c echo.Context) error {
 	if req.ArchiveSlug != "" {
 		// Format the slug to be alpha-numeric-dash.
 		s := strings.ToLower(req.ArchiveSlug)
-		s = strings.TrimSpace(regexSlug.ReplaceAllString(s, " "))
+		s = strings.TrimSpace(reSlug.ReplaceAllString(s, " "))
 		s = regexpSpaces.ReplaceAllString(s, "-")
 		req.ArchiveSlug = s
 	}
 
-	if err := app.core.UpdateCampaignArchive(id, req.Archive, req.TemplateID, req.Meta, req.ArchiveSlug); err != nil {
+	if err := a.core.UpdateCampaignArchive(id, req.Archive, req.TemplateID, req.Meta, req.ArchiveSlug); err != nil {
 		return err
 	}
 
 	return c.JSON(http.StatusOK, okResp{req})
 }
 
-// handleDeleteCampaign handles campaign deletion.
+// DeleteCampaign handles campaign deletion.
 // Only scheduled campaigns that have not started yet can be deleted.
-func handleDeleteCampaign(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+func (a *App) DeleteCampaign(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	if id < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeManage, id, c); err != nil {
+		return err
 	}
 
-	if err := app.core.DeleteCampaign(id); err != nil {
+	// Delete the campaign from the DB.
+	if err := a.core.DeleteCampaign(id); err != nil {
 		return err
 	}
 
 	return c.JSON(http.StatusOK, okResp{true})
 }
 
-// handleGetRunningCampaignStats returns stats of a given set of campaign IDs.
-func handleGetRunningCampaignStats(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
-
-	out, err := app.core.GetRunningCampaignStats()
+// GetRunningCampaignStats returns stats of a given set of campaign IDs.
+func (a *App) GetRunningCampaignStats(c echo.Context) error {
+	// Get the running campaign stats from the DB.
+	out, err := a.core.GetRunningCampaignStats()
 	if err != nil {
 		return err
 	}
@@ -379,10 +433,7 @@ func handleGetRunningCampaignStats(c echo.Context) error {
 	// Compute rate.
 	for i, c := range out {
 		if c.Started.Valid && c.UpdatedAt.Valid {
-			diff := int(c.UpdatedAt.Time.Sub(c.Started.Time).Minutes())
-			if diff < 1 {
-				diff = 1
-			}
+			diff := max(int(c.UpdatedAt.Time.Sub(c.Started.Time).Minutes()), 1)
 
 			rate := c.Sent / diff
 			if rate > c.Sent || rate > c.ToSend {
@@ -393,54 +444,54 @@ func handleGetRunningCampaignStats(c echo.Context) error {
 			out[i].NetRate = rate
 
 			// Realtime running rate over the last minute.
-			out[i].Rate = app.manager.GetCampaignStats(c.ID).SendRate
+			out[i].Rate = a.manager.GetCampaignStats(c.ID).SendRate
 		}
 	}
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleTestCampaign handles the sending of a campaign message to
+// TestCampaign handles the sending of a campaign message to
 // arbitrary subscribers for testing.
-func handleTestCampaign(c echo.Context) error {
-	var (
-		app       = c.Get("app").(*App)
-		campID, _ = strconv.Atoi(c.Param("id"))
-		tplID, _  = strconv.Atoi(c.FormValue("template_id"))
-		req       campaignReq
-	)
+func (a *App) TestCampaign(c echo.Context) error {
+	// Get the campaign ID.
+	id := getID(c)
 
-	if campID < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.errorID"))
+	// Check if the user has access to the campaign.
+	if err := a.checkCampaignPerm(auth.PermTypeManage, id, c); err != nil {
+		return err
 	}
 
 	// Get and validate fields.
+	var req campReq
 	if err := c.Bind(&req); err != nil {
 		return err
 	}
 
 	// Validate.
-	if c, err := validateCampaignFields(req, app); err != nil {
+	if c, err := a.validateCampaignFields(req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	} else {
 		req = c
 	}
 	if len(req.SubscriberEmails) == 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("campaigns.noSubsToTest"))
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("campaigns.noSubsToTest"))
 	}
 
-	// Get the subscribers.
-	for i := 0; i < len(req.SubscriberEmails); i++ {
+	// Sanitize subscriber e-mails.
+	for i := range req.SubscriberEmails {
 		req.SubscriberEmails[i] = strings.ToLower(strings.TrimSpace(req.SubscriberEmails[i]))
 	}
 
-	subs, err := app.core.GetSubscribersByEmail(req.SubscriberEmails)
+	// Get the subscribers from the DB by their e-mails.
+	subs, err := a.core.GetSubscribersByEmail(req.SubscriberEmails)
 	if err != nil {
 		return err
 	}
 
-	// The campaign.
-	camp, err := app.core.GetCampaignForPreview(campID, tplID)
+	// Get the campaign from the DB for previewing.
+	tplID, _ := strconv.Atoi(c.FormValue("template_id"))
+	camp, err := a.core.GetCampaignForPreview(id, tplID)
 	if err != nil {
 		return err
 	}
@@ -464,45 +515,42 @@ func handleTestCampaign(c echo.Context) error {
 	// Send the test messages.
 	for _, s := range subs {
 		sub := s
-		c := camp
-		if err := sendTestMessage(sub, &c, app); err != nil {
-			app.log.Printf("error sending test message: %v", err)
+
+		if err := a.sendTestMessage(sub, &camp); err != nil {
+			a.log.Printf("error sending test message: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError,
-				app.i18n.Ts("campaigns.errorSendTest", "error", err.Error()))
+				a.i18n.Ts("campaigns.errorSendTest", "error", err.Error()))
 		}
 	}
 
 	return c.JSON(http.StatusOK, okResp{true})
 }
 
-// handleGetCampaignViewAnalytics retrieves view counts for a campaign.
-func handleGetCampaignViewAnalytics(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-
-		typ  = c.Param("type")
-		from = c.QueryParams().Get("from")
-		to   = c.QueryParams().Get("to")
-	)
-
+// GetCampaignViewAnalytics retrieves view counts for a campaign.
+func (a *App) GetCampaignViewAnalytics(c echo.Context) error {
 	ids, err := parseStringIDs(c.Request().URL.Query()["id"])
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
-			app.i18n.Ts("globals.messages.errorInvalidIDs", "error", err.Error()))
+			a.i18n.Ts("globals.messages.errorInvalidIDs", "error", err.Error()))
 	}
 
 	if len(ids) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest,
-			app.i18n.Ts("globals.messages.missingFields", "name", "`id`"))
+			a.i18n.Ts("globals.messages.missingFields", "name", "`id`"))
 	}
 
+	var (
+		typ  = c.Param("type")
+		from = c.QueryParams().Get("from")
+		to   = c.QueryParams().Get("to")
+	)
 	if !strHasLen(from, 10, 30) || !strHasLen(to, 10, 30) {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("analytics.invalidDates"))
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("analytics.invalidDates"))
 	}
 
 	// Campaign link stats.
 	if typ == "links" {
-		out, err := app.core.GetCampaignAnalyticsLinks(ids, typ, from, to)
+		out, err := a.core.GetCampaignAnalyticsLinks(ids, typ, from, to)
 		if err != nil {
 			return err
 		}
@@ -510,8 +558,8 @@ func handleGetCampaignViewAnalytics(c echo.Context) error {
 		return c.JSON(http.StatusOK, okResp{out})
 	}
 
-	// View, click, bounce stats.
-	out, err := app.core.GetCampaignAnalyticsCounts(ids, typ, from, to)
+	// Get the analytics numbers from the DB for the campaigns.
+	out, err := a.core.GetCampaignAnalyticsCounts(ids, typ, from, to)
 	if err != nil {
 		return err
 	}
@@ -520,61 +568,73 @@ func handleGetCampaignViewAnalytics(c echo.Context) error {
 }
 
 // sendTestMessage takes a campaign and a subscriber and sends out a sample campaign message.
-func sendTestMessage(sub models.Subscriber, camp *models.Campaign, app *App) error {
-	if err := camp.CompileTemplate(app.manager.TemplateFuncs(camp)); err != nil {
-		app.log.Printf("error compiling template: %v", err)
+func (a *App) sendTestMessage(sub models.Subscriber, camp *models.Campaign) error {
+	if err := camp.CompileTemplate(a.manager.TemplateFuncs(camp)); err != nil {
+		a.log.Printf("error compiling template: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError,
-			app.i18n.Ts("templates.errorCompiling", "error", err.Error()))
+			a.i18n.Ts("templates.errorCompiling", "error", err.Error()))
 	}
 
 	// Create a sample campaign message.
-	msg, err := app.manager.NewCampaignMessage(camp, sub)
+	msg, err := a.manager.NewCampaignMessage(camp, sub)
 	if err != nil {
-		app.log.Printf("error rendering message: %v", err)
-		return echo.NewHTTPError(http.StatusNotFound,
-			app.i18n.Ts("templates.errorRendering", "error", err.Error()))
+		a.log.Printf("error rendering message: %v", err)
+		return echo.NewHTTPError(http.StatusNotFound, a.i18n.Ts("templates.errorRendering", "error", err.Error()))
 	}
 
-	return app.manager.PushCampaignMessage(msg)
+	return a.manager.PushCampaignMessage(msg)
 }
 
 // validateCampaignFields validates incoming campaign field values.
-func validateCampaignFields(c campaignReq, app *App) (campaignReq, error) {
+func (a *App) validateCampaignFields(c campReq) (campReq, error) {
 	if c.FromEmail == "" {
-		c.FromEmail = app.constants.FromEmail
-	} else if !regexFromAddress.Match([]byte(c.FromEmail)) {
-		if _, err := app.importer.SanitizeEmail(c.FromEmail); err != nil {
-			return c, errors.New(app.i18n.T("campaigns.fieldInvalidFromEmail"))
+		c.FromEmail = a.cfg.FromEmail
+	} else if !reFromAddress.Match([]byte(c.FromEmail)) {
+		if _, err := a.importer.SanitizeEmail(c.FromEmail); err != nil {
+			return c, errors.New(a.i18n.T("campaigns.fieldInvalidFromEmail"))
 		}
 	}
 
 	if !strHasLen(c.Name, 1, stdInputMaxLen) {
-		return c, errors.New(app.i18n.T("campaigns.fieldInvalidName"))
+		return c, errors.New(a.i18n.T("campaigns.fieldInvalidName"))
 	}
 
 	// Larger char limit for subject as it can contain {{ go templating }} logic.
 	if !strHasLen(c.Subject, 1, 5000) {
-		return c, errors.New(app.i18n.T("campaigns.fieldInvalidSubject"))
+		return c, errors.New(a.i18n.T("campaigns.fieldInvalidSubject"))
+	}
+
+	// If no content-type is specified, default to richtext.
+	if c.ContentType != models.CampaignContentTypeRichtext &&
+		c.ContentType != models.CampaignContentTypeHTML &&
+		c.ContentType != models.CampaignContentTypePlain &&
+		c.ContentType != models.CampaignContentTypeVisual &&
+		c.ContentType != models.CampaignContentTypeMarkdown {
+		c.ContentType = models.CampaignContentTypeRichtext
+	}
+
+	if c.ContentType != models.CampaignContentTypeVisual {
+		c.BodySource.Valid = false
 	}
 
 	// If there's a "send_at" date, it should be in the future.
 	if c.SendAt.Valid {
 		if c.SendAt.Time.Before(time.Now()) {
-			return c, errors.New(app.i18n.T("campaigns.fieldInvalidSendAt"))
+			return c, errors.New(a.i18n.T("campaigns.fieldInvalidSendAt"))
 		}
 	}
 
 	if len(c.ListIDs) == 0 {
-		return c, errors.New(app.i18n.T("campaigns.fieldInvalidListIDs"))
+		return c, errors.New(a.i18n.T("campaigns.fieldInvalidListIDs"))
 	}
 
-	if !app.manager.HasMessenger(c.Messenger) {
-		return c, errors.New(app.i18n.Ts("campaigns.fieldInvalidMessenger", "name", c.Messenger))
+	if !a.manager.HasMessenger(c.Messenger) {
+		return c, errors.New(a.i18n.Ts("campaigns.fieldInvalidMessenger", "name", c.Messenger))
 	}
 
 	camp := models.Campaign{Body: c.Body, TemplateBody: tplTag}
-	if err := c.CompileTemplate(app.manager.TemplateFuncs(&camp)); err != nil {
-		return c, errors.New(app.i18n.Ts("campaigns.fieldInvalidBody", "error", err.Error()))
+	if err := c.CompileTemplate(a.manager.TemplateFuncs(&camp)); err != nil {
+		return c, errors.New(a.i18n.Ts("campaigns.fieldInvalidBody", "error", err.Error()))
 	}
 
 	if len(c.Headers) == 0 {
@@ -588,7 +648,7 @@ func validateCampaignFields(c campaignReq, app *App) (campaignReq, error) {
 	if c.ArchiveSlug.String != "" {
 		// Format the slug to be alpha-numeric-dash.
 		s := strings.ToLower(c.ArchiveSlug.String)
-		s = strings.TrimSpace(regexSlug.ReplaceAllString(s, " "))
+		s = strings.TrimSpace(reSlug.ReplaceAllString(s, " "))
 		s = regexpSpaces.ReplaceAllString(s, "-")
 
 		c.ArchiveSlug = null.NewString(s, true)
@@ -600,29 +660,21 @@ func validateCampaignFields(c campaignReq, app *App) (campaignReq, error) {
 	return c, nil
 }
 
-// isCampaignalMutable tells if a campaign's in a state where it's
-// properties can be mutated.
-func isCampaignalMutable(status string) bool {
-	return status == models.CampaignStatusRunning ||
-		status == models.CampaignStatusCancelled ||
-		status == models.CampaignStatusFinished
-}
-
 // makeOptinCampaignMessage makes a default opt-in campaign message body.
-func makeOptinCampaignMessage(o campaignReq, app *App) (campaignReq, error) {
+func (a *App) makeOptinCampaignMessage(o campReq) (campReq, error) {
 	if len(o.ListIDs) == 0 {
-		return o, echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("campaigns.fieldInvalidListIDs"))
+		return o, echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("campaigns.fieldInvalidListIDs"))
 	}
 
-	// Fetch double opt-in lists from the given list IDs.
-	lists, err := app.core.GetListsByOptin(o.ListIDs, models.ListOptinDouble)
+	// Fetch double opt-in lists from the given list IDs from the DB.
+	lists, err := a.core.GetListsByOptin(o.ListIDs, models.ListOptinDouble)
 	if err != nil {
 		return o, err
 	}
 
-	// No opt-in lists.
+	// There are no double opt-in lists.
 	if len(lists) == 0 {
-		return o, echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("campaigns.noOptinLists"))
+		return o, echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("campaigns.noOptinLists"))
 	}
 
 	// Construct the opt-in URL with list IDs.
@@ -635,15 +687,60 @@ func makeOptinCampaignMessage(o campaignReq, app *App) (campaignReq, error) {
 
 	// Prepare sample opt-in message for the campaign.
 	var b bytes.Buffer
-	if err := app.notifTpls.tpls.ExecuteTemplate(&b, "optin-campaign", struct {
+
+	if err := notifs.Tpls.ExecuteTemplate(&b, "optin-campaign", struct {
 		Lists        []models.List
 		OptinURLAttr template.HTMLAttr
 	}{lists, optinURLAttr}); err != nil {
-		app.log.Printf("error compiling 'optin-campaign' template: %v", err)
+		a.log.Printf("error compiling 'optin-campaign' template: %v", err)
 		return o, echo.NewHTTPError(http.StatusBadRequest,
-			app.i18n.Ts("templates.errorCompiling", "error", err.Error()))
+			a.i18n.Ts("templates.errorCompiling", "error", err.Error()))
 	}
 
 	o.Body = b.String()
 	return o, nil
+}
+
+// checkCampaignPerm checks if the user has get or manage access to the given campaign.
+func (a *App) checkCampaignPerm(types auth.PermType, id int, c echo.Context) error {
+	// Get the authenticated user.
+	user := auth.GetUser(c)
+
+	perm := auth.PermCampaignsGet
+	if types&auth.PermTypeGet != 0 {
+		// It's a get request and there's a blanket get all permission.
+		if user.HasPerm(auth.PermCampaignsGetAll) {
+			return nil
+		}
+	} else {
+		// It's a manage request and there's a blanket manage_all permission.
+		if user.HasPerm(auth.PermCampaignsManageAll) {
+			return nil
+		}
+
+		perm = auth.PermCampaignsManage
+	}
+
+	// There are no *_all campaign permissions. Instead, check if the user access
+	// blanket get_all/manage_all list permissions. If yes, then the user can access
+	// all campaigns. If there are no *_all permissions, then ensure that the
+	// campaign belongs to the lists that the user has access to.
+	if hasAllPerm, permittedListIDs := user.GetPermittedLists(auth.PermTypeGet | auth.PermTypeManage); !hasAllPerm {
+		if ok, err := a.core.CampaignHasLists(id, permittedListIDs); err != nil {
+			return err
+		} else if !ok {
+			return echo.NewHTTPError(http.StatusForbidden,
+				a.i18n.Ts("globals.messages.permissionDenied", "name", perm))
+		}
+	}
+
+	return nil
+}
+
+// canEditCampaign returns true if a campaign is in a status where updating
+// its properties is allowed.
+func canEditCampaign(status string) bool {
+	return status == models.CampaignStatusDraft ||
+		status == models.CampaignStatusPaused ||
+		status == models.CampaignStatusScheduled
 }

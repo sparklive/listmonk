@@ -71,7 +71,7 @@ http.interceptors.response.use((resp) => {
   }
 
   let msg = '';
-  if (err.response.data && err.response.data.message) {
+  if (err.response && err.response.data && err.response.data.message) {
     msg = err.response.data.message;
   } else {
     msg = err.toString();
@@ -127,7 +127,7 @@ export const queryLists = (params) => http.get(
   '/api/lists',
   {
     params: (!params ? { per_page: 'all' } : params),
-    loading: models.lists,
+    loading: models.listsFull,
   },
 );
 
@@ -187,6 +187,11 @@ export const deleteBounce = async (id) => http.delete(
 export const deleteBounces = async (params) => http.delete(
   '/api/bounces',
   { params, loading: models.bounces },
+);
+
+export const blocklistBouncedSubscribers = async () => http.put(
+  '/api/bounces/blocklist',
+  { loading: models.bounces },
 );
 
 export const createSubscriber = (data) => http.post(
@@ -370,6 +375,11 @@ export const createTemplate = async (data) => http.post(
 export const getTemplates = async () => http.get(
   '/api/templates',
   { loading: models.templates, store: models.templates },
+);
+
+export const getTemplate = async (id) => http.get(
+  `/api/templates/${id}`,
+  { loading: models.templates },
 );
 
 export const updateTemplate = async (data) => http.put(

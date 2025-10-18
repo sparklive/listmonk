@@ -9,11 +9,12 @@ import (
 	"strings"
 
 	"github.com/knadh/listmonk/models"
-	"github.com/knadh/smtppool"
+	"github.com/knadh/smtppool/v2"
 )
 
 const (
-	emName        = "email"
+	MessengerName = "email"
+
 	hdrReturnPath = "Return-Path"
 	hdrBcc        = "Bcc"
 	hdrCc         = "Cc"
@@ -21,6 +22,8 @@ const (
 
 // Server represents an SMTP server's credentials.
 type Server struct {
+	// Name is a unique identifier for the server.
+	Name          string            `json:"name"`
 	Username      string            `json:"username"`
 	Password      string            `json:"password"`
 	AuthProtocol  string            `json:"auth_protocol"`
@@ -30,6 +33,7 @@ type Server struct {
 
 	// Rest of the options are embedded directly from the smtppool lib.
 	// The JSON tag is for config unmarshal to work.
+	//lint:ignore SA5008 ,squash is needed by koanf/mapstructure config unmarshal.
 	smtppool.Opt `json:",squash"`
 
 	pool *smtppool.Pool
@@ -38,16 +42,21 @@ type Server struct {
 // Emailer is the SMTP e-mail messenger.
 type Emailer struct {
 	servers []*Server
+	name    string
 }
 
 // New returns an SMTP e-mail Messenger backend with the given SMTP servers.
-func New(servers ...Server) (*Emailer, error) {
+// Group indicates whether the messenger represents a group of SMTP servers (1 or more)
+// that are used as a round-robin pool, or a single server.
+func New(name string, servers ...Server) (*Emailer, error) {
 	e := &Emailer{
 		servers: make([]*Server, 0, len(servers)),
+		name:    name,
 	}
 
 	for _, srv := range servers {
 		s := srv
+
 		var auth smtp.Auth
 		switch s.AuthProtocol {
 		case "cram":
@@ -63,6 +72,7 @@ func New(servers ...Server) (*Emailer, error) {
 		s.Opt.Auth = auth
 
 		// TLS config.
+		s.Opt.SSL = smtppool.SSLNone
 		if s.TLSType != "none" {
 			s.TLSConfig = &tls.Config{}
 			if s.TLSSkipVerify {
@@ -72,8 +82,11 @@ func New(servers ...Server) (*Emailer, error) {
 			}
 
 			// SSL/TLS, not STARTTLS.
-			if s.TLSType == "TLS" {
-				s.Opt.SSL = true
+			switch s.TLSType {
+			case "TLS":
+				s.Opt.SSL = smtppool.SSLTLS
+			case "STARTTLS":
+				s.Opt.SSL = smtppool.SSLSTARTTLS
 			}
 		}
 
@@ -89,9 +102,9 @@ func New(servers ...Server) (*Emailer, error) {
 	return e, nil
 }
 
-// Name returns the Server's name.
+// Name returns the messenger's name.
 func (e *Emailer) Name() string {
-	return emName
+	return e.name
 }
 
 // Push pushes a message to the server.
@@ -123,6 +136,7 @@ func (e *Emailer) Push(m models.Message) error {
 		}
 	}
 
+	// Create the email.
 	em := smtppool.Email{
 		From:        m.From,
 		To:          m.To,

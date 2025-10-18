@@ -24,38 +24,37 @@ import (
 	"github.com/knadh/listmonk/internal/i18n"
 	"github.com/knadh/listmonk/internal/manager"
 	"github.com/knadh/listmonk/internal/media"
+	"github.com/knadh/listmonk/internal/messenger/email"
 	"github.com/knadh/listmonk/internal/subimporter"
 	"github.com/knadh/listmonk/models"
 	"github.com/knadh/paginator"
 	"github.com/knadh/stuffbin"
 )
 
-const (
-	emailMsgr = "email"
-)
-
-// App contains the "global" components that are
-// passed around, especially through HTTP handlers.
+// App contains the "global" shared components, controllers and fields.
 type App struct {
-	core       *core.Core
+	cfg        *Config
+	urlCfg     *UrlConfig
 	fs         stuffbin.FileSystem
 	db         *sqlx.DB
 	queries    *models.Queries
-	constants  *constants
+	core       *core.Core
 	manager    *manager.Manager
+	messengers []manager.Messenger
+	emailMsgr  manager.Messenger
 	importer   *subimporter.Importer
-	messengers map[string]manager.Messenger
 	auth       *auth.Auth
 	media      media.Store
-	i18n       *i18n.I18n
 	bounce     *bounce.Manager
-	paginator  *paginator.Paginator
 	captcha    *captcha.Captcha
+	i18n       *i18n.I18n
+	pg         *paginator.Paginator
 	events     *events.Events
-	notifTpls  *notifTpls
-	about      about
 	log        *log.Logger
 	bufLog     *buflog.BufLog
+
+	about         about
+	fnOptinNotify func(models.Subscriber, []int) (int, error)
 
 	// Channel for passing reload signals.
 	chReload chan os.Signal
@@ -76,8 +75,7 @@ var (
 	// Buffered log writer for storing N lines of log entries for the UI.
 	evStream = events.New()
 	bufLog   = buflog.New(5000)
-	lo       = log.New(io.MultiWriter(os.Stdout, bufLog, evStream.ErrWriter()), "",
-		log.Ldate|log.Ltime|log.Lmicroseconds|log.Lshortfile)
+	lo       = log.New(io.MultiWriter(os.Stdout, bufLog, evStream.ErrWriter()), "", log.Ldate|log.Ltime|log.Lmicroseconds|log.Lshortfile)
 
 	ko      = koanf.New(".")
 	fs      stuffbin.FileSystem
@@ -96,7 +94,8 @@ var (
 )
 
 func init() {
-	initFlags()
+	// Initialize commandline flags.
+	initFlags(ko)
 
 	// Display version.
 	if ko.Bool("version") {
@@ -122,14 +121,15 @@ func init() {
 
 	// Load environment variables and merge into the loaded config.
 	if err := ko.Load(env.Provider("LISTMONK_", ".", func(s string) string {
-		return strings.Replace(strings.ToLower(
-			strings.TrimPrefix(s, "LISTMONK_")), "__", ".", -1)
+		return strings.Replace(strings.ToLower(strings.TrimPrefix(s, "LISTMONK_")), "__", ".", -1)
 	}), nil); err != nil {
 		lo.Fatalf("error loading config from env: %v", err)
 	}
 
-	// Connect to the database, load the filesystem to read SQL queries.
+	// Connect to the database.
 	db = initDB()
+
+	// Initialize the embedded filesystem with static assets.
 	fs = initFS(appDir, frontendDir, ko.String("static-dir"), ko.String("i18n-dir"))
 
 	// Installer mode? This runs before the SQL queries are loaded and prepared
@@ -156,7 +156,7 @@ func init() {
 	checkUpgrade(db)
 
 	// Read the SQL queries from the queries file.
-	qMap := readQueries(queryFilePath, db, fs)
+	qMap := readQueries(queryFilePath, fs)
 
 	// Load settings from DB.
 	if q, ok := qMap["get-settings"]; ok {
@@ -168,20 +168,101 @@ func init() {
 }
 
 func main() {
-	// Initialize the main app controller that wraps all of the app's
-	// components. This is passed around HTTP handlers.
+	var (
+		// Initialize static global config.
+		cfg = initConstConfig(ko)
+
+		// Initialize static URL config.
+		urlCfg = initUrlConfig(ko)
+
+		// Initialize i18n language map.
+		i18n = initI18n(ko.MustString("app.lang"), fs)
+
+		// Initialize the media store.
+		media = initMediaStore(ko)
+
+		fbOptinNotify = makeOptinNotifyHook(ko.Bool("privacy.unsubscribe_header"), urlCfg, queries, i18n)
+
+		// Crud core.
+		core = initCore(fbOptinNotify, queries, db, i18n, ko)
+
+		// Initialize all messengers, SMTP and postback.
+		msgrs = append(initSMTPMessengers(), initPostbackMessengers(ko)...)
+
+		// Campaign manager.
+		mgr = initCampaignManager(msgrs, queries, urlCfg, core, media, i18n, ko)
+
+		// Bulk importer.
+		importer = initImporter(queries, db, core, i18n, ko)
+
+		// Initialize the auth manager.
+		hasUsers, auth = initAuth(core, db.DB, ko)
+
+		// Initialize the webhook/POP3 bounce processor.
+		bounce *bounce.Manager
+
+		emailMsgr *email.Emailer
+
+		chReload = make(chan os.Signal, 1)
+	)
+
+	// Initialize the bounce manager that processes bounces from webhooks and
+	// POP3 mailbox scanning.
+	if ko.Bool("bounce.enabled") {
+		bounce = initBounceManager(core.RecordBounce, queries.RecordBounce, lo, ko)
+	}
+
+	// Assign the default `email` messenger to the app.
+	for _, m := range msgrs {
+		if m.Name() == "email" {
+			emailMsgr = m.(*email.Emailer)
+		}
+	}
+
+	// Initialize the global admin/sub e-mail notifier.
+	initNotifs(fs, i18n, emailMsgr, urlCfg, ko)
+
+	// Initialize and cache tx templates in memory.
+	initTxTemplates(mgr, core)
+
+	// Initialize the bounce manager that processes bounces from webhooks and
+	// POP3 mailbox scanning.
+	if ko.Bool("bounce.enabled") {
+		go bounce.Run()
+	}
+
+	// Start cronjobs.
+	if ko.Bool("app.cache_slow_queries") {
+		initCron(core)
+	}
+
+	// Start the campaign manager workers. The campaign batches (fetch from DB, push out
+	// messages) get processed at the specified interval.
+	go mgr.Run()
+
+	// =========================================================================
+	// Initialize the App{} with all the global shared components, controllers and fields.
 	app := &App{
+		cfg:        cfg,
+		urlCfg:     urlCfg,
 		fs:         fs,
 		db:         db,
-		constants:  initConstants(),
-		media:      initMediaStore(),
-		messengers: make(map[string]manager.Messenger),
-		log:        lo,
-		bufLog:     bufLog,
+		queries:    queries,
+		core:       core,
+		manager:    mgr,
+		messengers: msgrs,
+		emailMsgr:  emailMsgr,
+		importer:   importer,
+		auth:       auth,
+		media:      media,
+		bounce:     bounce,
 		captcha:    initCaptcha(),
+		i18n:       i18n,
+		log:        lo,
 		events:     evStream,
+		bufLog:     bufLog,
 
-		paginator: paginator.New(paginator.Opt{
+		pg: paginator.New(paginator.Opt{
 			DefaultPerPage: 20,
 			MaxPerPage:     50,
 			NumPageNums:    10,
@@ -189,98 +270,41 @@ func main() {
 			PerPageParam:   "per_page",
 			AllowAll:       true,
 		}),
+
+		fnOptinNotify: fbOptinNotify,
+		about:         initAbout(queries, db),
+		chReload:      chReload,
+
+		// If there are no users, then the app needs to prompt for new user setup.
+		needsUserSetup: !hasUsers,
 	}
-
-	// Load i18n language map.
-	app.i18n = initI18n(app.constants.Lang, fs)
-	cOpt := &core.Opt{
-		Constants: core.Constants{
-			SendOptinConfirmation: app.constants.SendOptinConfirmation,
-			CacheSlowQueries:      ko.Bool("app.cache_slow_queries"),
-		},
-		Queries: queries,
-		DB:      db,
-		I18n:    app.i18n,
-		Log:     lo,
-	}
-
-	if err := ko.Unmarshal("bounce.actions", &cOpt.Constants.BounceActions); err != nil {
-		lo.Fatalf("error unmarshalling bounce config: %v", err)
-	}
-
-	app.core = core.New(cOpt, &core.Hooks{
-		SendOptinConfirmation: sendOptinConfirmationHook(app),
-	})
-
-	app.queries = queries
-	app.manager = initCampaignManager(app.queries, app.constants, app)
-	app.importer = initImporter(app.queries, db, app.core, app)
-
-	hasUsers, auth := initAuth(db.DB, ko, app.core)
-	app.auth = auth
-	// If there are are no users in the DB who can login, the app has to prompt
-	// for new user setup.
-	app.needsUserSetup = !hasUsers
-
-	app.notifTpls = initNotifTemplates("/email-templates/*.html", fs, app.i18n, app.constants)
-	initTxTemplates(app.manager, app)
-
-	if ko.Bool("bounce.enabled") {
-		app.bounce = initBounceManager(app)
-		go app.bounce.Run()
-	}
-
-	// Initialize the default SMTP (`email`) messenger.
-	app.messengers[emailMsgr] = initSMTPMessenger(app.manager)
-
-	// Initialize any additional postback messengers.
-	for _, m := range initPostbackMessengers(app.manager) {
-		app.messengers[m.Name()] = m
-	}
-
-	// Attach all messengers to the campaign manager.
-	for _, m := range app.messengers {
-		app.manager.AddMessenger(m)
-	}
-
-	// Load system information.
-	app.about = initAbout(queries, db)
-
-	// Start cronjobs.
-	if cOpt.Constants.CacheSlowQueries {
-		initCron(app.core)
-	}
-
-	// Start the campaign workers. The campaign batches (fetch from DB, push out
-	// messages) get processed at the specified interval.
-	go app.manager.Run()
-
-	// Start the app server.
-	srv := initHTTPServer(app)
 
 	// Star the update checker.
 	if ko.Bool("app.check_updates") {
-		go checkUpdates(versionString, time.Hour*24, app)
+		go app.checkUpdates(versionString, time.Hour*24)
 	}
 
+	// Start the app server.
+	srv := initHTTPServer(cfg, urlCfg, i18n, fs, app)
+
+	// =========================================================================
 	// Wait for the reload signal with a callback to gracefully shut down resources.
 	// The `wait` channel is passed to awaitReload to wait for the callback to finish
 	// within N seconds, or do a force reload.
-	app.chReload = make(chan os.Signal)
-	signal.Notify(app.chReload, syscall.SIGHUP)
+	signal.Notify(chReload, syscall.SIGHUP)
 
 	closerWait := make(chan bool)
-	<-awaitReload(app.chReload, closerWait, func() {
+	<-awaitReload(chReload, closerWait, func() {
 		// Stop the HTTP server.
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 		defer cancel()
 		srv.Shutdown(ctx)
 
 		// Close the campaign manager.
-		app.manager.Close()
+		mgr.Close()
 
 		// Close the DB pool.
-		app.db.DB.Close()
+		db.Close()
 
 		// Close the messenger pool.
 		for _, m := range app.messengers {

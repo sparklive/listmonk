@@ -3,21 +3,16 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
-	"github.com/knadh/listmonk/models"
+	"github.com/knadh/listmonk/internal/auth"
 	"github.com/labstack/echo/v4"
 )
 
-// handleGetUserRoles retrieves roles.
-func handleGetUserRoles(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
-
+// GetUserRoles retrieves roles.
+func (a *App) GetUserRoles(c echo.Context) error {
 	// Get all roles.
-	out, err := app.core.GetRoles()
+	out, err := a.core.GetRoles()
 	if err != nil {
 		return err
 	}
@@ -25,14 +20,10 @@ func handleGetUserRoles(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleGeListRoles retrieves roles.
-func handleGeListRoles(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
-
+// GeListRoles retrieves roles.
+func (a *App) GeListRoles(c echo.Context) error {
 	// Get all roles.
-	out, err := app.core.GetListRoles()
+	out, err := a.core.GetListRoles()
 	if err != nil {
 		return err
 	}
@@ -40,22 +31,18 @@ func handleGeListRoles(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleCreateUserRole handles role creation.
-func handleCreateUserRole(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-		r   = models.Role{}
-	)
-
+// CreateUserRole handles role creation.
+func (a *App) CreateUserRole(c echo.Context) error {
+	var r auth.Role
 	if err := c.Bind(&r); err != nil {
 		return err
 	}
-
-	if err := validateUserRole(r, app); err != nil {
+	if err := a.validateUserRole(r); err != nil {
 		return err
 	}
 
-	out, err := app.core.CreateRole(r)
+	// Create the role in the DB.
+	out, err := a.core.CreateRole(r)
 	if err != nil {
 		return err
 	}
@@ -63,22 +50,18 @@ func handleCreateUserRole(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleCreateListRole handles role creation.
-func handleCreateListRole(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-		r   = models.ListRole{}
-	)
-
+// CreateListRole handles role creation.
+func (a *App) CreateListRole(c echo.Context) error {
+	var r auth.ListRole
 	if err := c.Bind(&r); err != nil {
 		return err
 	}
-
-	if err := validateListRole(r, app); err != nil {
+	if err := a.validateListRole(r); err != nil {
 		return err
 	}
 
-	out, err := app.core.CreateListRole(r)
+	// Create the role in the DB.
+	out, err := a.core.CreateListRole(r)
 	if err != nil {
 		return err
 	}
@@ -86,128 +69,124 @@ func handleCreateListRole(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleUpdateUserRole handles role modification.
-func handleUpdateUserRole(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+// UpdateUserRole handles role modification.
+func (a *App) UpdateUserRole(c echo.Context) error {
+	id := getID(c)
 
-	if id < 2 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// ID 1 is reserved for the Super Admin user role.
+	if id == auth.SuperAdminRoleID {
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidID"))
 	}
 
 	// Incoming params.
-	var r models.Role
+	var r auth.Role
 	if err := c.Bind(&r); err != nil {
 		return err
 	}
-
-	if err := validateUserRole(r, app); err != nil {
+	if err := a.validateUserRole(r); err != nil {
 		return err
 	}
 
 	// Validate.
 	r.Name.String = strings.TrimSpace(r.Name.String)
 
-	out, err := app.core.UpdateUserRole(id, r)
+	// Update the role in the DB.
+	out, err := a.core.UpdateUserRole(id, r)
 	if err != nil {
 		return err
 	}
 
-	// Cache the API token for validating API queries without hitting the DB every time.
-	if _, err := cacheUsers(app.core, app.auth); err != nil {
+	// Cache API tokens for in-memory, off-DB /api/* request auth.
+	if _, err := cacheUsers(a.core, a.auth); err != nil {
 		return err
 	}
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleUpdateListRole handles role modification.
-func handleUpdateListRole(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.Atoi(c.Param("id"))
-	)
+// UpdateListRole handles role modification.
+func (a *App) UpdateListRole(c echo.Context) error {
+	// Get the role ID.
+	id := getID(c)
 
-	if id < 2 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// ID 1 is reserved for the Super Admin user role.
+	if id == auth.SuperAdminRoleID {
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidID"))
 	}
 
 	// Incoming params.
-	var r models.ListRole
+	var r auth.ListRole
 	if err := c.Bind(&r); err != nil {
 		return err
 	}
 
-	if err := validateListRole(r, app); err != nil {
+	if err := a.validateListRole(r); err != nil {
 		return err
 	}
 
 	// Validate.
 	r.Name.String = strings.TrimSpace(r.Name.String)
 
-	out, err := app.core.UpdateListRole(id, r)
+	// Update the role in the DB.
+	out, err := a.core.UpdateListRole(id, r)
 	if err != nil {
 		return err
 	}
 
-	// Cache the API token for validating API queries without hitting the DB every time.
-	if _, err := cacheUsers(app.core, app.auth); err != nil {
+	// Cache API tokens for in-memory, off-DB /api/* request auth.
+	if _, err := cacheUsers(a.core, a.auth); err != nil {
 		return err
 	}
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleDeleteRole handles role deletion.
-func handleDeleteRole(c echo.Context) error {
-	var (
-		app   = c.Get("app").(*App)
-		id, _ = strconv.ParseInt(c.Param("id"), 10, 64)
-	)
+// DeleteRole handles (user|list) role deletion.
+func (a *App) DeleteRole(c echo.Context) error {
+	// Get the role ID.
+	id := getID(c)
 
-	if id < 1 {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidID"))
+	// ID 1 is reserved for the Super Admin user role.
+	if id == auth.SuperAdminRoleID {
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidID"))
 	}
 
-	if err := app.core.DeleteRole(int(id)); err != nil {
+	// Delete the role from the DB.
+	if err := a.core.DeleteRole(int(id)); err != nil {
 		return err
 	}
 
-	// Cache the API token for validating API queries without hitting the DB every time.
-	if _, err := cacheUsers(app.core, app.auth); err != nil {
+	// Cache API tokens for in-memory, off-DB /api/* request auth.
+	if _, err := cacheUsers(a.core, a.auth); err != nil {
 		return err
 	}
 
 	return c.JSON(http.StatusOK, okResp{true})
 }
 
-func validateUserRole(r models.Role, app *App) error {
-	// Validate fields.
+func (a *App) validateUserRole(r auth.Role) error {
 	if !strHasLen(r.Name.String, 1, stdInputMaxLen) {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.Ts("globals.messages.invalidFields", "name", "name"))
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.Ts("globals.messages.invalidFields", "name", "name"))
 	}
 
 	for _, p := range r.Permissions {
-		if _, ok := app.constants.Permissions[p]; !ok {
-			return echo.NewHTTPError(http.StatusBadRequest, app.i18n.Ts("globals.messages.invalidFields", "name", fmt.Sprintf("permission: %s", p)))
+		if _, ok := a.cfg.Permissions[p]; !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, a.i18n.Ts("globals.messages.invalidFields", "name", fmt.Sprintf("permission: %s", p)))
 		}
 	}
 
 	return nil
 }
 
-func validateListRole(r models.ListRole, app *App) error {
-	// Validate fields.
+func (a *App) validateListRole(r auth.ListRole) error {
 	if !strHasLen(r.Name.String, 1, stdInputMaxLen) {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.Ts("globals.messages.invalidFields", "name", "name"))
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.Ts("globals.messages.invalidFields", "name", "name"))
 	}
 
 	for _, l := range r.Lists {
 		for _, p := range l.Permissions {
-			if p != "list:get" && p != "list:manage" {
-				return echo.NewHTTPError(http.StatusBadRequest, app.i18n.Ts("globals.messages.invalidFields", "name", fmt.Sprintf("list permission: %s", p)))
+			if p != auth.PermListGet && p != auth.PermListManage {
+				return echo.NewHTTPError(http.StatusBadRequest, a.i18n.Ts("globals.messages.invalidFields", "name", fmt.Sprintf("list permission: %s", p)))
 			}
 		}
 	}

@@ -7,25 +7,22 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// handleGCSubscribers garbage collects (deletes) orphaned or blocklisted subscribers.
-func handleGCSubscribers(c echo.Context) error {
+// GCSubscribers garbage collects (deletes) orphaned or blocklisted subscribers.
+func (a *App) GCSubscribers(c echo.Context) error {
 	var (
-		app = c.Get("app").(*App)
 		typ = c.Param("type")
-	)
 
-	var (
 		n   int
 		err error
 	)
 
 	switch typ {
 	case "blocklisted":
-		n, err = app.core.DeleteBlocklistedSubscribers()
+		n, err = a.core.DeleteBlocklistedSubscribers()
 	case "orphan":
-		n, err = app.core.DeleteOrphanSubscribers()
+		n, err = a.core.DeleteOrphanSubscribers()
 	default:
-		err = echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidData"))
+		err = echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidData"))
 	}
 
 	if err != nil {
@@ -37,18 +34,16 @@ func handleGCSubscribers(c echo.Context) error {
 	}{n}})
 }
 
-// handleGCSubscriptions garbage collects (deletes) orphaned or blocklisted subscribers.
-func handleGCSubscriptions(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
-
+// GCSubscriptions garbage collects (deletes) orphaned or blocklisted subscribers.
+func (a *App) GCSubscriptions(c echo.Context) error {
+	// Validate the date.
 	t, err := time.Parse(time.RFC3339, c.FormValue("before_date"))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidData"))
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidData"))
 	}
 
-	n, err := app.core.DeleteUnconfirmedSubscriptions(t)
+	// Delete unconfirmed subscriptions from the DB in bulk.
+	n, err := a.core.DeleteUnconfirmedSubscriptions(t)
 	if err != nil {
 		return err
 	}
@@ -58,30 +53,26 @@ func handleGCSubscriptions(c echo.Context) error {
 	}{n}})
 }
 
-// handleGCCampaignAnalytics garbage collects (deletes) campaign analytics.
-func handleGCCampaignAnalytics(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-		typ = c.Param("type")
-	)
+// GCCampaignAnalytics garbage collects (deletes) campaign analytics.
+func (a *App) GCCampaignAnalytics(c echo.Context) error {
 
 	t, err := time.Parse(time.RFC3339, c.FormValue("before_date"))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidData"))
+		return echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidData"))
 	}
 
-	switch typ {
+	switch c.Param("type") {
 	case "all":
-		if err := app.core.DeleteCampaignViews(t); err != nil {
+		if err := a.core.DeleteCampaignViews(t); err != nil {
 			return err
 		}
-		err = app.core.DeleteCampaignLinkClicks(t)
+		err = a.core.DeleteCampaignLinkClicks(t)
 	case "views":
-		err = app.core.DeleteCampaignViews(t)
+		err = a.core.DeleteCampaignViews(t)
 	case "clicks":
-		err = app.core.DeleteCampaignLinkClicks(t)
+		err = a.core.DeleteCampaignLinkClicks(t)
 	default:
-		err = echo.NewHTTPError(http.StatusBadRequest, app.i18n.T("globals.messages.invalidData"))
+		err = echo.NewHTTPError(http.StatusBadRequest, a.i18n.T("globals.messages.invalidData"))
 	}
 
 	if err != nil {

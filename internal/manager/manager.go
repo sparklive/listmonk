@@ -10,9 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"maps"
+
 	"github.com/Masterminds/sprig/v3"
 	"github.com/knadh/listmonk/internal/i18n"
+	"github.com/knadh/listmonk/internal/notifs"
 	"github.com/knadh/listmonk/models"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -60,7 +65,7 @@ type Manager struct {
 	store      Store
 	i18n       *i18n.I18n
 	messengers map[string]Messenger
-	notifCB    models.AdminNotifCallback
+	fnNotify   func(subject string, data any) error
 	log        *log.Logger
 
 	// Campaigns that are currently running.
@@ -138,15 +143,10 @@ type Config struct {
 	ScanCampaigns bool
 }
 
-type msgError struct {
-	st  *pipe
-	err error
-}
-
 var pushTimeout = time.Second * 3
 
 // New returns a new instance of Mailer.
-func New(cfg Config, store Store, notifCB models.AdminNotifCallback, i *i18n.I18n, l *log.Logger) *Manager {
+func New(cfg Config, store Store, i *i18n.I18n, l *log.Logger) *Manager {
 	if cfg.BatchSize < 1 {
 		cfg.BatchSize = 1000
 	}
@@ -158,10 +158,12 @@ func New(cfg Config, store Store, notifCB models.AdminNotifCallback, i *i18n.I18
 	}
 
 	m := &Manager{
-		cfg:          cfg,
-		store:        store,
-		i18n:         i,
-		notifCB:      notifCB,
+		cfg:   cfg,
+		store: store,
+		i18n:  i,
+		fnNotify: func(subject string, data any) error {
+			return notifs.NotifySystem(subject, notifs.TplCampaignStatus, data, nil)
+		},
 		log:          l,
 		messengers:   make(map[string]Messenger),
 		pipes:        make(map[int]*pipe),
@@ -184,6 +186,7 @@ func (m *Manager) AddMessenger(msg Messenger) error {
 		return fmt.Errorf("messenger '%s' is already loaded", id)
 	}
 	m.messengers[id] = msg
+
 	return nil
 }
 
@@ -199,6 +202,7 @@ func (m *Manager) PushMessage(msg models.Message) error {
 		m.log.Printf("message push timed out: '%s'", msg.Subject)
 		return errors.New("message push timed out")
 	}
+
 	return nil
 }
 
@@ -219,12 +223,14 @@ func (m *Manager) PushCampaignMessage(msg CampaignMessage) error {
 		m.log.Printf("message push timed out: '%s'", msg.Subject())
 		return errors.New("message push timed out")
 	}
+
 	return nil
 }
 
 // HasMessenger checks if a given messenger is registered.
 func (m *Manager) HasMessenger(id string) bool {
 	_, ok := m.messengers[id]
+
 	return ok
 }
 
@@ -232,6 +238,7 @@ func (m *Manager) HasMessenger(id string) bool {
 func (m *Manager) HasRunningCampaigns() bool {
 	m.pipesMut.Lock()
 	defer m.pipesMut.Unlock()
+
 	return len(m.pipes) > 0
 }
 
@@ -282,8 +289,15 @@ func (m *Manager) Run() {
 			default:
 			}
 		} else {
-			// Mark the pseudo counter that's added in makePipe() that is used
-			// to force a wait on a pipe.
+			// The pipe is created with a +1 on the waitgroup pseudo counter
+			// so that it immediately waits. Subsequently, every message created
+			// is incremented in the counter in pipe.newMessage(), and when it's'
+			// processed (or ignored when a campaign is paused or cancelled),
+			// the count is's reduced in worker().
+			//
+			// This marks down the original non-message +1, causing the waitgroup
+			// to be released and the pipe to end, triggering the pg.Wait()
+			// in newPipe() that calls pipe.cleanup().
 			p.wg.Done()
 		}
 	}
@@ -359,9 +373,7 @@ func (m *Manager) TemplateFuncs(c *models.Campaign) template.FuncMap {
 		},
 	}
 
-	for k, v := range m.tplFuncs {
-		f[k] = v
-	}
+	maps.Copy(f, m.tplFuncs)
 
 	return f
 }
@@ -392,33 +404,30 @@ func (m *Manager) scanCampaigns(tick time.Duration) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
 
-	for {
-		select {
-		// Periodically scan the data source for campaigns to process.
-		case <-t.C:
-			ids, counts := m.getCurrentCampaigns()
-			campaigns, err := m.store.NextCampaigns(ids, counts)
+	// Periodically scan the data source for campaigns to process.
+	for range t.C {
+		ids, counts := m.getCurrentCampaigns()
+		campaigns, err := m.store.NextCampaigns(ids, counts)
+		if err != nil {
+			m.log.Printf("error fetching campaigns: %v", err)
+			continue
+		}
+
+		for _, c := range campaigns {
+			// Create a new pipe that'll handle this campaign's states.
+			p, err := m.newPipe(c)
 			if err != nil {
-				m.log.Printf("error fetching campaigns: %v", err)
+				m.log.Printf("error processing campaign (%s): %v", c.Name, err)
 				continue
 			}
+			m.log.Printf("start processing campaign (%s)", c.Name)
 
-			for _, c := range campaigns {
-				// Create a new pipe that'll handle this campaign's states.
-				p, err := m.newPipe(c)
-				if err != nil {
-					m.log.Printf("error processing campaign (%s): %v", c.Name, err)
-					continue
-				}
-				m.log.Printf("start processing campaign (%s)", c.Name)
-
-				// If subscriber processing is busy, move on. Blocking and waiting
-				// can end up in a race condition where the waiting campaign's
-				// state in the data source has changed.
-				select {
-				case m.nextPipes <- p:
-				default:
-				}
+			// If subscriber processing is busy, move on. Blocking and waiting
+			// can end up in a race condition where the waiting campaign's
+			// state in the data source has changed.
+			select {
+			case m.nextPipes <- p:
+			default:
 			}
 		}
 	}
@@ -437,8 +446,9 @@ func (m *Manager) worker() {
 				return
 			}
 
-			// If the campaign has ended, ignore the message.
+			// If the campaign has ended or stopped, ignore the message.
 			if msg.pipe != nil && msg.pipe.stopped.Load() {
+				// Reduce the message counter on the pipe.
 				msg.pipe.wg.Done()
 				continue
 			}
@@ -482,8 +492,10 @@ func (m *Manager) worker() {
 				}
 			}
 
+			// Set the headers.
 			out.Headers = h
 
+			// Push the message to the messenger.
 			err := m.messengers[msg.Campaign.Messenger].Push(out)
 			if err != nil {
 				m.log.Printf("error sending message in campaign %s: subscriber %d: %v", msg.Campaign.Name, msg.Subscriber.ID, err)
@@ -495,6 +507,8 @@ func (m *Manager) worker() {
 				msg.pipe.wg.Done()
 
 				if err != nil {
+					// Call the error callback, which keeps track of the error count
+					// and stops the campaign if the error count exceeds the threshold.
 					msg.pipe.OnError()
 				} else {
 					id := uint64(msg.Subscriber.ID)
@@ -512,24 +526,12 @@ func (m *Manager) worker() {
 				return
 			}
 
-			err := m.messengers[msg.Messenger].Push(msg)
-			if err != nil {
+			// Push the message to the messenger.
+			if err := m.messengers[msg.Messenger].Push(msg); err != nil {
 				m.log.Printf("error sending message '%s': %v", msg.Subject, err)
 			}
 		}
 	}
-}
-
-// getRunningCampaignIDs returns the IDs of campaigns currently being processed.
-func (m *Manager) getRunningCampaignIDs() []int64 {
-	// Needs to return an empty slice in case there are no campaigns.
-	m.pipesMut.RLock()
-	ids := make([]int64, 0, len(m.pipes))
-	for _, p := range m.pipes {
-		ids = append(ids, int64(p.camp.ID))
-	}
-	m.pipesMut.RUnlock()
-	return ids
 }
 
 // getCurrentCampaigns returns the IDs of campaigns currently being processed
@@ -553,14 +555,6 @@ func (m *Manager) getCurrentCampaigns() ([]int64, []int64) {
 	}
 
 	return ids, counts
-}
-
-// isCampaignProcessing checks if the campaign is being processed.
-func (m *Manager) isCampaignProcessing(id int) bool {
-	m.pipesMut.RLock()
-	_, ok := m.pipes[id]
-	m.pipesMut.RUnlock()
-	return ok
 }
 
 // trackLink register a URL and return its UUID to be used in message templates
@@ -594,8 +588,8 @@ func (m *Manager) trackLink(url, campUUID, subUUID string) string {
 // sendNotif sends a notification to registered admin e-mails.
 func (m *Manager) sendNotif(c *models.Campaign, status, reason string) error {
 	var (
-		subject = fmt.Sprintf("%s: %s", strings.Title(status), c.Name)
-		data    = map[string]interface{}{
+		subject = fmt.Sprintf("%s: %s", cases.Title(language.Und).String(status), c.Name)
+		data    = map[string]any{
 			"ID":     c.ID,
 			"Name":   c.Name,
 			"Status": status,
@@ -604,11 +598,14 @@ func (m *Manager) sendNotif(c *models.Campaign, status, reason string) error {
 			"Reason": reason,
 		}
 	)
-	return m.notifCB(subject, data)
+
+	return m.fnNotify(subject, data)
 }
 
+// makeGnericFuncMap returns a generic template func map with custom template
+// functions and sprig template functions.
 func (m *Manager) makeGnericFuncMap() template.FuncMap {
-	f := template.FuncMap{
+	funcs := template.FuncMap{
 		"Date": func(layout string) string {
 			if layout == "" {
 				layout = time.ANSIC
@@ -623,13 +620,19 @@ func (m *Manager) makeGnericFuncMap() template.FuncMap {
 		},
 	}
 
-	for k, v := range sprig.GenericFuncMap() {
-		f[k] = v
-	}
+	// Copy spring functions.
+	sprigFuncs := sprig.GenericFuncMap()
+	delete(sprigFuncs, "env")
+	delete(sprigFuncs, "expandenv")
+	delete(sprigFuncs, "getHostByName")
 
-	return f
+	maps.Copy(funcs, sprigFuncs)
+
+	return funcs
 }
 
+// attachMedia loads any media/attachments from the media store and attaches
+// the byte blobs to the campaign.
 func (m *Manager) attachMedia(c *models.Campaign) error {
 	// Load any media/attachments.
 	for _, mid := range []int64(c.MediaIDs) {

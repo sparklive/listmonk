@@ -53,8 +53,7 @@
 
       <!-- body //-->
       <div class="main">
-        <div class="global-notices"
-          v-if="serverConfig.needs_restart || serverConfig.update || serverConfig.has_legacy_user">
+        <div class="global-notices" v-if="isGlobalNotices">
           <div v-if="serverConfig.needs_restart" class="notification is-danger">
             {{ $t('settings.needsRestart') }}
             &mdash;
@@ -87,7 +86,7 @@
             <b-icon icon="warning-empty" />
             Remove the <code>admin_username</code> and <code>admin_password</code> fields from the TOML
             configuration file or environment variables. If you are using APIs, create and use new API credentials
-            before removing the them. Visit
+            before removing them. Visit
             <router-link :to="{ name: 'users' }">
               Admin -> Settings -> Users
             </router-link> dashboard. <a href="https://listmonk.app/docs/upgrade/#upgrading-to-v4xx" target="_blank"
@@ -187,6 +186,14 @@ export default Vue.extend({
 
   computed: {
     ...mapState(['serverConfig', 'profile']),
+
+    isGlobalNotices() {
+      return (this.serverConfig.needs_restart
+        || this.serverConfig.has_legacy_user
+        || (this.serverConfig.update
+        && this.serverConfig.update.messages
+        && this.serverConfig.update.messages.length > 0));
+    },
 
     version() {
       return import.meta.env.VUE_APP_VERSION;

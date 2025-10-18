@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
+	"maps"
 	"net/http"
 	"os"
 	"path"
@@ -23,7 +25,7 @@ import (
 	"github.com/jmoiron/sqlx/types"
 	"github.com/knadh/goyesql/v2"
 	goyesqlx "github.com/knadh/goyesql/v2/sqlx"
-	"github.com/knadh/koanf/maps"
+	koanfmaps "github.com/knadh/koanf/maps"
 	"github.com/knadh/koanf/parsers/toml"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/file"
@@ -41,6 +43,7 @@ import (
 	"github.com/knadh/listmonk/internal/media/providers/s3"
 	"github.com/knadh/listmonk/internal/messenger/email"
 	"github.com/knadh/listmonk/internal/messenger/postback"
+	"github.com/knadh/listmonk/internal/notifs"
 	"github.com/knadh/listmonk/internal/subimporter"
 	"github.com/knadh/listmonk/models"
 	"github.com/knadh/stuffbin"
@@ -52,21 +55,31 @@ import (
 
 const (
 	queryFilePath = "queries.sql"
+	emailMsgr     = "email"
 )
 
-// constants contains static, constant config values required by the app.
-type constants struct {
+// UrlConfig contains various URL constants used in the app.
+type UrlConfig struct {
+	RootURL      string `koanf:"root_url"`
+	LogoURL      string `koanf:"logo_url"`
+	FaviconURL   string `koanf:"favicon_url"`
+	LoginURL     string `koanf:"login_url"`
+	UnsubURL     string
+	LinkTrackURL string
+	ViewTrackURL string
+	OptinURL     string
+	MessageURL   string
+	ArchiveURL   string
+}
+
+// Config contains static, constant config values required by arbitrary handlers and functions.
+type Config struct {
 	SiteName                      string   `koanf:"site_name"`
-	RootURL                       string   `koanf:"root_url"`
-	LogoURL                       string   `koanf:"logo_url"`
-	FaviconURL                    string   `koanf:"favicon_url"`
-	LoginURL                      string   `koanf:"login_url"`
 	FromEmail                     string   `koanf:"from_email"`
 	NotifyEmails                  []string `koanf:"notify_emails"`
 	EnablePublicSubPage           bool     `koanf:"enable_public_subscription_page"`
 	EnablePublicArchive           bool     `koanf:"enable_public_archive"`
 	EnablePublicArchiveRSSContent bool     `koanf:"enable_public_archive_rss_content"`
-	SendOptinConfirmation         bool     `koanf:"send_optin_confirmation"`
 	Lang                          string   `koanf:"lang"`
 	DBBatchSize                   int      `koanf:"batch_size"`
 	Privacy                       struct {
@@ -76,20 +89,34 @@ type constants struct {
 		AllowExport        bool            `koanf:"allow_export"`
 		AllowWipe          bool            `koanf:"allow_wipe"`
 		RecordOptinIP      bool            `koanf:"record_optin_ip"`
+		UnsubHeader        bool            `koanf:"unsubscribe_header"`
 		Exportable         map[string]bool `koanf:"-"`
 		DomainBlocklist    []string        `koanf:"-"`
+		DomainAllowlist    []string        `koanf:"-"`
 	} `koanf:"privacy"`
 	Security struct {
 		OIDC struct {
-			Enabled      bool   `koanf:"enabled"`
-			Provider     string `koanf:"provider_url"`
-			ClientID     string `koanf:"client_id"`
-			ClientSecret string `koanf:"client_secret"`
+			Enabled           bool   `koanf:"enabled"`
+			ProviderURL       string `koanf:"provider_url"`
+			ProviderName      string `koanf:"provider_name"`
+			ClientID          string `koanf:"client_id"`
+			ClientSecret      string `koanf:"client_secret"`
+			AutoCreateUsers   bool   `koanf:"auto_create_users"`
+			DefaultUserRoleID int    `koanf:"default_user_role_id"`
+			DefaultListRoleID int    `koanf:"default_list_role_id"`
 		} `koanf:"oidc"`
 
-		EnableCaptcha bool   `koanf:"enable_captcha"`
-		CaptchaKey    string `koanf:"captcha_key"`
-		CaptchaSecret string `koanf:"captcha_secret"`
+		Captcha struct {
+			Altcha struct {
+				Enabled    bool `koanf:"enabled"`
+				Complexity int  `koanf:"complexity"`
+			} `koanf:"altcha"`
+			HCaptcha struct {
+				Enabled bool   `koanf:"enabled"`
+				Key     string `koanf:"key"`
+				Secret  string `koanf:"secret"`
+			} `koanf:"hcaptcha"`
+		} `koanf:"captcha"`
 	} `koanf:"security"`
 
 	Appearance struct {
@@ -100,12 +127,6 @@ type constants struct {
 	}
 
 	HasLegacyUser bool
-	UnsubURL      string
-	LinkTrackURL  string
-	ViewTrackURL  string
-	OptinURL      string
-	MessageURL    string
-	ArchiveURL    string
 	AssetVersion  string
 
 	MediaUpload struct {
@@ -123,12 +144,8 @@ type constants struct {
 	Permissions    map[string]struct{}
 }
 
-type notifTpls struct {
-	tpls        *template.Template
-	contentType string
-}
-
-func initFlags() {
+// initFlags initializes the commandline flags into the Koanf instance.
+func initFlags(ko *koanf.Koanf) {
 	f := flag.NewFlagSet("config", flag.ContinueOnError)
 	f.Usage = func() {
 		// Register --help handler.
@@ -311,11 +328,11 @@ func initDB() *sqlx.DB {
 	db.SetMaxIdleConns(c.MaxIdle)
 	db.SetConnMaxLifetime(c.MaxLifetime)
 
-	return db
+	return db.Unsafe()
 }
 
 // readQueries reads named SQL queries from the SQL queries file into a query map.
-func readQueries(sqlFile string, db *sqlx.DB, fs stuffbin.FileSystem) goyesql.Queries {
+func readQueries(sqlFile string, fs stuffbin.FileSystem) goyesql.Queries {
 	// Load SQL queries.
 	qB, err := fs.Read(sqlFile)
 	if err != nil {
@@ -353,7 +370,7 @@ func prepareQueries(qMap goyesql.Queries, db *sqlx.DB, ko *koanf.Koanf) *models.
 
 	// Scan and prepare all queries.
 	var q models.Queries
-	if err := goyesqlx.ScanToStruct(&q, qMap, db.Unsafe()); err != nil {
+	if err := goyesqlx.ScanToStruct(&q, qMap, db); err != nil {
 		lo.Fatalf("error preparing SQL queries: %v", err)
 	}
 
@@ -376,7 +393,7 @@ func initSettings(query string, db *sqlx.DB, ko *koanf.Koanf) {
 
 	// Setting keys are dot separated, eg: app.favicon_url. Unflatten them into
 	// nested maps {app: {favicon_url}}.
-	var out map[string]interface{}
+	var out map[string]any
 	if err := json.Unmarshal(s, &out); err != nil {
 		lo.Fatalf("error unmarshalling settings from DB: %v", err)
 	}
@@ -385,9 +402,40 @@ func initSettings(query string, db *sqlx.DB, ko *koanf.Koanf) {
 	}
 }
 
-func initConstants() *constants {
+func initUrlConfig(ko *koanf.Koanf) *UrlConfig {
+	root := strings.TrimSuffix(ko.String("app.root_url"), "/")
+
+	return &UrlConfig{
+		RootURL:    root,
+		LogoURL:    ko.String("app.logo_url"),
+		FaviconURL: ko.String("app.favicon_url"),
+		LoginURL:   path.Join(uriAdmin, "/login"),
+
+		// Static URLS.
+		// url.com/subscription/{campaign_uuid}/{subscriber_uuid}
+		UnsubURL: fmt.Sprintf("%s/subscription/%%s/%%s", root),
+
+		// url.com/subscription/optin/{subscriber_uuid}
+		OptinURL: fmt.Sprintf("%s/subscription/optin/%%s?%%s", root),
+
+		// url.com/link/{campaign_uuid}/{subscriber_uuid}/{link_uuid}
+		LinkTrackURL: fmt.Sprintf("%s/link/%%s/%%s/%%s", root),
+
+		// url.com/link/{campaign_uuid}/{subscriber_uuid}
+		MessageURL: fmt.Sprintf("%s/campaign/%%s/%%s", root),
+
+		// url.com/archive
+		ArchiveURL: root + "/archive",
+
+		// url.com/campaign/{campaign_uuid}/{subscriber_uuid}/px.png
+		ViewTrackURL: fmt.Sprintf("%s/campaign/%%s/%%s/px.png", root),
+	}
+}
+
+// initConstConfig initializes the app's global constants from the given koanf instance.
+func initConstConfig(ko *koanf.Koanf) *Config {
 	// Read constants.
-	var c constants
+	var c Config
 	if err := ko.Unmarshal("app", &c); err != nil {
 		lo.Fatalf("error loading app config: %v", err)
 	}
@@ -402,32 +450,12 @@ func initConstants() *constants {
 		lo.Fatalf("error loading app.appearance config: %v", err)
 	}
 
-	c.RootURL = strings.TrimRight(c.RootURL, "/")
-	c.LoginURL = path.Join(uriAdmin, "/login")
 	c.Lang = ko.String("app.lang")
-	c.Privacy.Exportable = maps.StringSliceToLookupMap(ko.Strings("privacy.exportable"))
+	c.Privacy.Exportable = koanfmaps.StringSliceToLookupMap(ko.Strings("privacy.exportable"))
 	c.MediaUpload.Provider = ko.String("upload.provider")
 	c.MediaUpload.Extensions = ko.Strings("upload.extensions")
 	c.Privacy.DomainBlocklist = ko.Strings("privacy.domain_blocklist")
-
-	// Static URLS.
-	// url.com/subscription/{campaign_uuid}/{subscriber_uuid}
-	c.UnsubURL = fmt.Sprintf("%s/subscription/%%s/%%s", c.RootURL)
-
-	// url.com/subscription/optin/{subscriber_uuid}
-	c.OptinURL = fmt.Sprintf("%s/subscription/optin/%%s?%%s", c.RootURL)
-
-	// url.com/link/{campaign_uuid}/{subscriber_uuid}/{link_uuid}
-	c.LinkTrackURL = fmt.Sprintf("%s/link/%%s/%%s/%%s", c.RootURL)
-
-	// url.com/link/{campaign_uuid}/{subscriber_uuid}
-	c.MessageURL = fmt.Sprintf("%s/campaign/%%s/%%s", c.RootURL)
-
-	// url.com/archive
-	c.ArchiveURL = c.RootURL + "/archive"
-
-	// url.com/campaign/{campaign_uuid}/{subscriber_uuid}/px.png
-	c.ViewTrackURL = fmt.Sprintf("%s/campaign/%%s/%%s/px.png", c.RootURL)
+	c.Privacy.DomainAllowlist = ko.Strings("privacy.domain_allowlist")
 
 	c.BounceWebhooksEnabled = ko.Bool("bounce.webhooks_enabled")
 	c.BounceSESEnabled = ko.Bool("bounce.ses_enabled")
@@ -480,48 +508,76 @@ func initI18n(lang string, fs stuffbin.FileSystem) *i18n.I18n {
 	return i
 }
 
-// initCampaignManager initializes the campaign manager.
-func initCampaignManager(q *models.Queries, cs *constants, app *App) *manager.Manager {
-	campNotifCB := func(subject string, data interface{}) error {
-		return app.sendNotification(cs.NotifyEmails, subject, notifTplCampaign, data)
+// initCore initializes the CRUD DB core .
+func initCore(fnNotify func(sub models.Subscriber, listIDs []int) (int, error), queries *models.Queries, db *sqlx.DB, i *i18n.I18n, ko *koanf.Koanf) *core.Core {
+	opt := &core.Opt{
+		Constants: core.Constants{
+			SendOptinConfirmation: ko.Bool("app.send_optin_confirmation"),
+			CacheSlowQueries:      ko.Bool("app.cache_slow_queries"),
+		},
+		Queries: queries,
+		DB:      db,
+		I18n:    i,
+		Log:     lo,
 	}
 
+	// Load bounce config.
+	if err := ko.Unmarshal("bounce.actions", &opt.Constants.BounceActions); err != nil {
+		lo.Fatalf("error unmarshalling bounce config: %v", err)
+	}
+
+	// Initialize the CRUD core.
+	return core.New(opt, &core.Hooks{
+		SendOptinConfirmation: fnNotify,
+	})
+}
+
+// initCampaignManager initializes the campaign manager.
+func initCampaignManager(msgrs []manager.Messenger, q *models.Queries, u *UrlConfig, co *core.Core, md media.Store, i *i18n.I18n, ko *koanf.Koanf) *manager.Manager {
 	if ko.Bool("passive") {
 		lo.Println("running in passive mode. won't process campaigns.")
 	}
 
-	return manager.New(manager.Config{
+	mgr := manager.New(manager.Config{
 		BatchSize:             ko.Int("app.batch_size"),
 		Concurrency:           ko.Int("app.concurrency"),
 		MessageRate:           ko.Int("app.message_rate"),
 		MaxSendErrors:         ko.Int("app.max_send_errors"),
-		FromEmail:             cs.FromEmail,
+		FromEmail:             ko.String("app.from_email"),
 		IndividualTracking:    ko.Bool("privacy.individual_tracking"),
-		UnsubURL:              cs.UnsubURL,
-		OptinURL:              cs.OptinURL,
-		LinkTrackURL:          cs.LinkTrackURL,
-		ViewTrackURL:          cs.ViewTrackURL,
-		MessageURL:            cs.MessageURL,
-		ArchiveURL:            cs.ArchiveURL,
-		RootURL:               cs.RootURL,
+		UnsubURL:              u.UnsubURL,
+		OptinURL:              u.OptinURL,
+		LinkTrackURL:          u.LinkTrackURL,
+		ViewTrackURL:          u.ViewTrackURL,
+		MessageURL:            u.MessageURL,
+		ArchiveURL:            u.ArchiveURL,
+		RootURL:               u.RootURL,
 		UnsubHeader:           ko.Bool("privacy.unsubscribe_header"),
 		SlidingWindow:         ko.Bool("app.message_sliding_window"),
 		SlidingWindowDuration: ko.Duration("app.message_sliding_window_duration"),
 		SlidingWindowRate:     ko.Int("app.message_sliding_window_rate"),
 		ScanInterval:          time.Second * 5,
 		ScanCampaigns:         !ko.Bool("passive"),
-	}, newManagerStore(q, app.core, app.media), campNotifCB, app.i18n, lo)
+	}, newManagerStore(q, co, md), i, lo)
+
+	// Attach all messengers to the campaign manager.
+	for _, m := range msgrs {
+		mgr.AddMessenger(m)
+	}
+
+	return mgr
 }
 
-func initTxTemplates(m *manager.Manager, app *App) {
-	tpls, err := app.core.GetTemplates(models.TemplateTypeTx, false)
+// initTxTemplates initializes and compiles the transactional templates and caches them in-memory.
+func initTxTemplates(m *manager.Manager, co *core.Core) {
+	tpls, err := co.GetTemplates(models.TemplateTypeTx, false)
 	if err != nil {
 		lo.Fatalf("error loading transactional templates: %v", err)
 	}
 
 	for _, t := range tpls {
 		tpl := t
-		if err := tpl.Compile(app.manager.GenericTemplateFuncs()); err != nil {
+		if err := tpl.Compile(m.GenericTemplateFuncs()); err != nil {
 			lo.Printf("error compiling transactional template %d: %v", tpl.ID, err)
 			continue
 		}
@@ -530,37 +586,37 @@ func initTxTemplates(m *manager.Manager, app *App) {
 }
 
 // initImporter initializes the bulk subscriber importer.
-func initImporter(q *models.Queries, db *sqlx.DB, core *core.Core, app *App) *subimporter.Importer {
+func initImporter(q *models.Queries, db *sqlx.DB, core *core.Core, i *i18n.I18n, ko *koanf.Koanf) *subimporter.Importer {
 	return subimporter.New(
 		subimporter.Options{
-			DomainBlocklist:    app.constants.Privacy.DomainBlocklist,
+			DomainBlocklist:    ko.Strings("privacy.domain_blocklist"),
+			DomainAllowlist:    ko.Strings("privacy.domain_allowlist"),
 			UpsertStmt:         q.UpsertSubscriber.Stmt,
 			BlocklistStmt:      q.UpsertBlocklistSubscriber.Stmt,
 			UpdateListDateStmt: q.UpdateListsDate.Stmt,
-			NotifCB: func(subject string, data interface{}) error {
+
+			// Hook for triggering admin notifications and refreshing stats materialized
+			// views after a successful import.
+			PostCB: func(subject string, data any) error {
 				// Refresh cached subscriber counts and stats.
 				core.RefreshMatViews(true)
 
-				app.sendNotification(app.constants.NotifyEmails, subject, notifTplImport, data)
+				// Send admin notification.
+				notifs.NotifySystem(subject, notifs.TplImport, data, nil)
 				return nil
 			},
-		}, db.DB, app.i18n)
+		}, db.DB, i)
 }
 
-// initSMTPMessenger initializes the SMTP messenger.
-func initSMTPMessenger(m *manager.Manager) manager.Messenger {
+// initSMTPMessenger initializes the combined and individual SMTP messengers.
+func initSMTPMessengers() []manager.Messenger {
 	var (
-		mapKeys = ko.MapKeys("smtp")
-		servers = make([]email.Server, 0, len(mapKeys))
+		servers = []email.Server{}
+		out     = []manager.Messenger{}
 	)
 
-	items := ko.Slices("smtp")
-	if len(items) == 0 {
-		lo.Fatalf("no SMTP servers found in config")
-	}
-
 	// Load the config for multiple SMTP servers.
-	for _, item := range items {
+	for _, item := range ko.Slices("smtp") {
 		if !item.Bool("enabled") {
 			continue
 		}
@@ -572,25 +628,39 @@ func initSMTPMessenger(m *manager.Manager) manager.Messenger {
 		}
 
 		servers = append(servers, s)
-		lo.Printf("loaded email (SMTP) messenger: %s@%s",
-			item.String("username"), item.String("host"))
-	}
-	if len(servers) == 0 {
-		lo.Fatalf("no SMTP servers enabled in settings")
+		lo.Printf("initialized email (SMTP) messenger: %s@%s", item.String("username"), item.String("host"))
+
+		// If the server has a name, initialize it as a standalone e-mail messenger
+		// allowing campaigns to select individual SMTPs. In the UI and config, it'll appear as `email / $name`.
+		if s.Name != "" {
+			msgr, err := email.New(s.Name, s)
+			if err != nil {
+				lo.Fatalf("error initializing e-mail messenger: %v", err)
+			}
+			out = append(out, msgr)
+		}
 	}
 
-	// Initialize the e-mail messenger with multiple SMTP servers.
-	msgr, err := email.New(servers...)
+	// Initialize the 'email' messenger with all SMTP servers.
+	msgr, err := email.New(email.MessengerName, servers...)
 	if err != nil {
-		lo.Fatalf("error loading e-mail messenger: %v", err)
+		lo.Fatalf("error initializing e-mail messenger: %v", err)
 	}
 
-	return msgr
+	// If it's just one server, return the default "email" messenger.
+	if len(servers) == 1 {
+		return []manager.Messenger{msgr}
+	}
+
+	// If there are multiple servers, prepend the group "email" to be the first one.
+	out = append([]manager.Messenger{msgr}, out...)
+
+	return out
 }
 
 // initPostbackMessengers initializes and returns all the enabled
 // HTTP postback messenger backends.
-func initPostbackMessengers(m *manager.Manager) []manager.Messenger {
+func initPostbackMessengers(ko *koanf.Koanf) []manager.Messenger {
 	items := ko.Slices("messengers")
 	if len(items) == 0 {
 		return nil
@@ -625,7 +695,7 @@ func initPostbackMessengers(m *manager.Manager) []manager.Messenger {
 }
 
 // initMediaStore initializes Upload manager with a custom backend.
-func initMediaStore() media.Store {
+func initMediaStore(ko *koanf.Koanf) media.Store {
 	switch provider := ko.String("upload.provider"); provider {
 	case "s3":
 		var o s3.Opt
@@ -658,44 +728,41 @@ func initMediaStore() media.Store {
 	return nil
 }
 
-// initNotifTemplates compiles and returns e-mail notification templates that are
-// used for sending ad-hoc notifications to admins and subscribers.
-func initNotifTemplates(path string, fs stuffbin.FileSystem, i *i18n.I18n, cs *constants) *notifTpls {
-	tpls, err := stuffbin.ParseTemplatesGlob(initTplFuncs(i, cs), fs, "/static/email-templates/*.html")
+// initNotifs initializes the notifier with the system e-mail templates.
+func initNotifs(fs stuffbin.FileSystem, i *i18n.I18n, em *email.Emailer, u *UrlConfig, ko *koanf.Koanf) {
+	tpls, err := stuffbin.ParseTemplatesGlob(initTplFuncs(i, u), fs, "/static/email-templates/*.html")
 	if err != nil {
 		lo.Fatalf("error parsing e-mail notif templates: %v", err)
 	}
 
+	// Read the notification templates.
 	html, err := fs.Read("/static/email-templates/base.html")
 	if err != nil {
 		lo.Fatalf("error reading static/email-templates/base.html: %v", err)
 	}
 
-	out := &notifTpls{
-		tpls:        tpls,
-		contentType: models.CampaignContentTypeHTML,
-	}
-
 	// Determine whether the notification templates are HTML or plaintext.
 	// Copy the first few (arbitrary) bytes of the template and check if has the <!doctype html> tag.
-	ln := 256
-	if len(html) < ln {
-		ln = len(html)
-	}
+	ln := min(len(html), 256)
 	h := make([]byte, ln)
 	copy(h, html[0:ln])
 
+	contentType := models.CampaignContentTypeHTML
 	if !bytes.Contains(bytes.ToLower(h), []byte("<!doctype html")) {
-		out.contentType = models.CampaignContentTypePlain
+		contentType = models.CampaignContentTypePlain
 		lo.Println("system e-mail templates are plaintext")
 	}
 
-	return out
+	notifs.Initialize(notifs.Opt{
+		FromEmail:    ko.String("app.from_email"),
+		SystemEmails: ko.Strings("app.notify_emails"),
+		ContentType:  contentType,
+	}, tpls, em, lo)
 }
 
 // initBounceManager initializes the bounce manager that scans mailboxes and listens to webhooks
 // for incoming bounce events.
-func initBounceManager(app *App) *bounce.Manager {
+func initBounceManager(cb func(models.Bounce) error, stmt *sqlx.Stmt, lo *log.Logger, ko *koanf.Koanf) *bounce.Manager {
 	opt := bounce.Opt{
 		WebhooksEnabled: ko.Bool("bounce.webhooks_enabled"),
 		SESEnabled:      ko.Bool("bounce.ses_enabled"),
@@ -717,7 +784,7 @@ func initBounceManager(app *App) *bounce.Manager {
 			ko.Bool("bounce.forwardemail.enabled"),
 			ko.String("bounce.forwardemail.key"),
 		},
-		RecordBounceCB: app.core.RecordBounce,
+		RecordBounceCB: cb,
 	}
 
 	// For now, only one mailbox is supported.
@@ -737,9 +804,8 @@ func initBounceManager(app *App) *bounce.Manager {
 		break
 	}
 
-	b, err := bounce.New(opt, &bounce.Queries{
-		RecordQuery: app.queries.RecordBounce,
-	}, app.log)
+	// Initialize the bounce manager.
+	b, err := bounce.New(opt, &bounce.Queries{RecordQuery: stmt}, lo)
 	if err != nil {
 		lo.Fatalf("error initializing bounce manager: %v", err)
 	}
@@ -747,6 +813,7 @@ func initBounceManager(app *App) *bounce.Manager {
 	return b
 }
 
+// initAbout initializes the app's /about API endpoint with the app and system info.
 func initAbout(q *models.Queries, db *sqlx.DB) about {
 	var (
 		mem runtime.MemStats
@@ -784,7 +851,7 @@ func initAbout(q *models.Queries, db *sqlx.DB) about {
 }
 
 // initHTTPServer sets up and runs the app's main HTTP server and blocks forever.
-func initHTTPServer(app *App) *echo.Echo {
+func initHTTPServer(cfg *Config, urlCfg *UrlConfig, i *i18n.I18n, fs stuffbin.FileSystem, app *App) *echo.Echo {
 	// Initialize the HTTP server.
 	var srv = echo.New()
 	srv.HideBanner = true
@@ -797,24 +864,24 @@ func initHTTPServer(app *App) *echo.Echo {
 		}
 	})
 
-	tpl, err := stuffbin.ParseTemplatesGlob(initTplFuncs(app.i18n, app.constants), app.fs, "/public/templates/*.html")
+	tpl, err := stuffbin.ParseTemplatesGlob(initTplFuncs(i, urlCfg), fs, "/public/templates/*.html")
 	if err != nil {
 		lo.Fatalf("error parsing public templates: %v", err)
 	}
 	srv.Renderer = &tplRenderer{
 		templates:           tpl,
-		SiteName:            app.constants.SiteName,
-		RootURL:             app.constants.RootURL,
-		LogoURL:             app.constants.LogoURL,
-		FaviconURL:          app.constants.FaviconURL,
-		AssetVersion:        app.constants.AssetVersion,
-		EnablePublicSubPage: app.constants.EnablePublicSubPage,
-		EnablePublicArchive: app.constants.EnablePublicArchive,
-		IndividualTracking:  app.constants.Privacy.IndividualTracking,
+		SiteName:            cfg.SiteName,
+		RootURL:             urlCfg.RootURL,
+		LogoURL:             urlCfg.LogoURL,
+		FaviconURL:          urlCfg.FaviconURL,
+		AssetVersion:        cfg.AssetVersion,
+		EnablePublicSubPage: cfg.EnablePublicSubPage,
+		EnablePublicArchive: cfg.EnablePublicArchive,
+		IndividualTracking:  cfg.Privacy.IndividualTracking,
 	}
 
 	// Initialize the static file server.
-	fSrv := app.fs.FileServer()
+	fSrv := fs.FileServer()
 
 	// Public (subscriber) facing static files.
 	srv.GET("/public/static/*", echo.WrapHandler(fSrv))
@@ -844,17 +911,28 @@ func initHTTPServer(app *App) *echo.Echo {
 	return srv
 }
 
+// initCaptcha initializes the captcha service.
 func initCaptcha() *captcha.Captcha {
-	return captcha.New(captcha.Opt{
-		CaptchaSecret: ko.String("security.captcha_secret"),
-	})
+	var opt captcha.Opt
+	if err := ko.Unmarshal("security.captcha", &opt); err != nil {
+		lo.Fatalf("error loading captcha config: %v", err)
+	}
+
+	return captcha.New(opt)
 }
 
-func initCron(core *core.Core) {
+// initCron initializes the cron job for refreshing slow query cache.
+func initCron(co *core.Core) {
+	intval := ko.String("app.cache_slow_queries_interval")
+	if intval == "" {
+		lo.Println("error: invalid cron interval string")
+		return
+	}
+
 	c := cron.New()
-	_, err := c.Add(ko.MustString("app.cache_slow_queries_interval"), func() {
+	_, err := c.Add(intval, func() {
 		lo.Println("refreshing slow query cache")
-		_ = core.RefreshMatViews(true)
+		_ = co.RefreshMatViews(true)
 		lo.Println("done refreshing slow query cache")
 	})
 	if err != nil {
@@ -866,6 +944,7 @@ func initCron(core *core.Core) {
 	lo.Printf("IMPORTANT: database slow query caching is enabled. Aggregate numbers and stats will not be realtime. Next refresh at: %v", c.Entries()[0].Next)
 }
 
+// awaitReload waits for a SIGHUP signal to reload the app. Every setting change on the UI causes a reload.
 func awaitReload(sigChan chan os.Signal, closerWait chan bool, closer func()) chan bool {
 	// The blocking signal handler that main() waits on.
 	out := make(chan bool)
@@ -898,25 +977,15 @@ func awaitReload(sigChan chan os.Signal, closerWait chan bool, closer func()) ch
 	return out
 }
 
-func joinFSPaths(root string, paths []string) []string {
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		// real_path:stuffbin_alias
-		f := strings.Split(p, ":")
-
-		out = append(out, path.Join(root, f[0])+":"+f[1])
-	}
-
-	return out
-}
-
-func initTplFuncs(i *i18n.I18n, cs *constants) template.FuncMap {
+// initTplFuncs returns a generic template func map with custom template
+// functions and sprig template functions.
+func initTplFuncs(i *i18n.I18n, u *UrlConfig) template.FuncMap {
 	funcs := template.FuncMap{
 		"RootURL": func() string {
-			return cs.RootURL
+			return u.RootURL
 		},
 		"LogoURL": func() string {
-			return cs.LogoURL
+			return u.LogoURL
 		},
 		"Date": func(layout string) string {
 			if layout == "" {
@@ -932,46 +1001,55 @@ func initTplFuncs(i *i18n.I18n, cs *constants) template.FuncMap {
 		},
 	}
 
-	for k, v := range sprig.GenericFuncMap() {
-		funcs[k] = v
-	}
+	// Copy spring functions.
+	sprigFuncs := sprig.GenericFuncMap()
+	delete(sprigFuncs, "env")
+	delete(sprigFuncs, "expandenv")
+	delete(sprigFuncs, "getHostByName")
+
+	maps.Copy(funcs, sprigFuncs)
 
 	return funcs
 }
 
-func initAuth(db *sql.DB, ko *koanf.Koanf, co *core.Core) (bool, *auth.Auth) {
+// initAuth initializes the auth module with the given DB connection and
+func initAuth(co *core.Core, db *sql.DB, ko *koanf.Koanf) (bool, *auth.Auth) {
 	var oidcCfg auth.OIDCConfig
 
+	// If OIDC is enabled, set up the OIDC config.
 	if ko.Bool("security.oidc.enabled") {
 		oidcCfg = auth.OIDCConfig{
-			Enabled:      true,
-			ProviderURL:  ko.String("security.oidc.provider_url"),
-			ClientID:     ko.String("security.oidc.client_id"),
-			ClientSecret: ko.String("security.oidc.client_secret"),
-			RedirectURL:  fmt.Sprintf("%s/auth/oidc", strings.TrimRight(ko.String("app.root_url"), "/")),
+			Enabled:           true,
+			ProviderURL:       ko.String("security.oidc.provider_url"),
+			ClientID:          ko.String("security.oidc.client_id"),
+			ClientSecret:      ko.String("security.oidc.client_secret"),
+			AutoCreateUsers:   ko.Bool("security.oidc.auto_create_users"),
+			DefaultUserRoleID: ko.Int("security.oidc.default_user_role_id"),
+			DefaultListRoleID: ko.Int("security.oidc.default_list_role_id"),
+			RedirectURL:       fmt.Sprintf("%s/auth/oidc", strings.TrimRight(ko.String("app.root_url"), "/")),
 		}
 	}
 
-	// Session manager callbacks for getting and setting cookies.
+	// Setup the sessio manager callbacks for getting and setting cookies.
 	cb := &auth.Callbacks{
-		GetCookie: func(name string, r interface{}) (*http.Cookie, error) {
+		GetCookie: func(name string, r any) (*http.Cookie, error) {
 			c := r.(echo.Context)
 			cookie, err := c.Cookie(name)
 			return cookie, err
 		},
-		SetCookie: func(cookie *http.Cookie, w interface{}) error {
+		SetCookie: func(cookie *http.Cookie, w any) error {
 			c := w.(echo.Context)
+			cookie.SameSite = http.SameSiteLaxMode
 			c.SetCookie(cookie)
 			return nil
 		},
-		GetUser: func(id int) (models.User, error) {
+		GetUser: func(id int) (auth.User, error) {
 			return co.GetUser(id, "", "")
 		},
 	}
 
-	a, err := auth.New(auth.Config{
-		OIDC: oidcCfg,
-	}, db, cb, lo)
+	// Initiaize the auth module.
+	a, err := auth.New(auth.Config{OIDC: oidcCfg}, db, cb, lo)
 	if err != nil {
 		lo.Fatalf("error initializing auth: %v", err)
 	}
@@ -992,13 +1070,13 @@ func initAuth(db *sql.DB, ko *koanf.Koanf, co *core.Core) (bool, *auth.Auth) {
 		password = ko.String("app.admin_password")
 	)
 	if len(username) > 2 && len(password) > 6 {
-		u := models.User{
+		u := auth.User{
 			Username:      username,
 			Password:      null.String{Valid: true, String: password},
 			PasswordLogin: true,
 			HasPassword:   true,
-			Status:        models.UserStatusEnabled,
-			Type:          models.UserTypeAPI,
+			Status:        auth.UserStatusEnabled,
+			Type:          auth.UserTypeAPI,
 		}
 		u.UserRole.ID = auth.SuperAdminRoleID
 		a.CacheAPIUser(u)
@@ -1007,4 +1085,17 @@ func initAuth(db *sql.DB, ko *koanf.Koanf, co *core.Core) (bool, *auth.Auth) {
 	}
 
 	return hasUsers, a
+}
+
+// joinFSPaths joins the given paths with the root path and returns the full paths.
+func joinFSPaths(root string, paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		// real_path:stuffbin_alias
+		f := strings.Split(p, ":")
+
+		out = append(out, path.Join(root, f[0])+":"+f[1])
+	}
+
+	return out
 }

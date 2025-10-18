@@ -167,7 +167,7 @@ export default Vue.extend({
 
       isProcessing: false,
       status: { status: '' },
-      logs: '',
+      logs: [],
       pollID: null,
     };
   },
@@ -256,8 +256,7 @@ export default Vue.extend({
 
     getLogs() {
       this.$api.getImportLogs().then((data) => {
-        this.logs = data.split('\n');
-
+        this.logs = data.split('\n').map((line) => line.replace(/\s+importer\.go:\d+:\s*/, ' *: '));
         Vue.nextTick(() => {
           // vue.$refs doesn't work as the logs textarea is rendered dynamically.
           const ref = document.getElementById('import-log');
@@ -278,9 +277,9 @@ export default Vue.extend({
     },
 
     renderExample() {
-      const h = 'email, name, attributes\n'
-        + 'user1 @mail.com, "User One", "{""age"": 42, ""planet"": ""Mars""}"\n'
-        + 'user2 @mail.com, "User Two", "{""age"": 24, ""job"": ""Time Traveller""}"';
+      const h = 'email,name,attributes\n'
+        + 'user1@mail.com,"User One","{""age"": 42, ""planet"": ""Mars""}"\n'
+        + 'user2@mail.com,"User Two","{""age"": 24, ""job"": ""Time Traveller""}"';
 
       this.example = h;
     },

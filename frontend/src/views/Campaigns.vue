@@ -52,16 +52,14 @@
             </router-link>
           </p>
           <p v-if="isSheduled(props.row)">
-            <b-tooltip :label="$t('scheduled')" type="is-dark">
-              <span class="is-size-7 has-text-grey scheduled">
-                <b-icon icon="alarm" size="is-small" />
-                <span v-if="!isDone(props.row) && !isRunning(props.row)">
-                  {{ $utils.duration(new Date(), props.row.sendAt, true) }}
-                  <br />
-                </span>
-                {{ $utils.niceDate(props.row.sendAt, true) }}
+            <span class="is-size-7 has-text-grey scheduled">
+              <b-icon icon="alarm" size="is-small" />
+              <span v-if="!isDone(props.row) && !isRunning(props.row)">
+                {{ $utils.duration(new Date(), props.row.sendAt, true) }}
+                <br />
               </span>
-            </b-tooltip>
+              {{ $utils.niceDate(props.row.sendAt, true) }}
+            </span>
           </p>
         </div>
       </b-table-column>
@@ -74,10 +72,11 @@
             </b-tag>
             <router-link :to="{ name: 'campaign', params: { id: props.row.id } }">
               {{ props.row.name }}
+              <copy-text :text="props.row.name" hide-text />
             </router-link>
           </p>
           <p class="is-size-7 has-text-grey">
-            {{ props.row.subject }}
+            <copy-text :text="props.row.subject" />
           </p>
           <b-taglist>
             <b-tag class="is-small" v-for="t in props.row.tags" :key="t">
@@ -146,8 +145,7 @@
             <label for="#"><b-icon icon="speedometer" size="is-small" /></label>
             <span class="send-rate">
               <b-tooltip
-                :label="`${stats.netRate} / ${$t('campaigns.rateMinuteShort')} @
-                                                                                          ${$utils.duration(stats.startedAt, stats.updatedAt)}`"
+                :label="`${stats.netRate} / ${$t('campaigns.rateMinuteShort')} @ ${$utils.duration(stats.startedAt, stats.updatedAt)}`"
                 type="is-dark">
                 {{ stats.rate.toFixed(0) }} / {{ $t('campaigns.rateMinuteShort') }}
               </b-tooltip>
@@ -267,11 +265,13 @@ import Vue from 'vue';
 import { mapState } from 'vuex';
 import CampaignPreview from '../components/CampaignPreview.vue';
 import EmptyPlaceholder from '../components/EmptyPlaceholder.vue';
+import CopyText from '../components/CopyText.vue';
 
 export default Vue.extend({
   components: {
     CampaignPreview,
     EmptyPlaceholder,
+    CopyText,
   },
 
   data() {
@@ -352,6 +352,7 @@ export default Vue.extend({
         query: this.queryParams.query.replace(/[^\p{L}\p{N}\s]/gu, ' '),
         order_by: this.queryParams.orderBy,
         order: this.queryParams.order,
+        no_body: true,
       });
     },
 
@@ -402,7 +403,15 @@ export default Vue.extend({
       });
     },
 
-    cloneCampaign(name, c) {
+    async cloneCampaign(name, c) {
+      // Fetch the template body from the server.
+      let body = '';
+      let bodySource = null;
+      await this.$api.getCampaign(c.id).then((data) => {
+        body = data.body;
+        bodySource = data.bodySource;
+      });
+
       const now = this.$utils.getDate();
       const sendLater = !!c.sendAt;
       let sendAt = null;
@@ -420,7 +429,8 @@ export default Vue.extend({
         messenger: c.messenger,
         tags: c.tags,
         template_id: c.templateId,
-        body: c.body,
+        body,
+        body_source: bodySource,
         altbody: c.altbody,
         headers: c.headers,
         send_later: sendLater,

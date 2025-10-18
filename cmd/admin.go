@@ -4,16 +4,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"syscall"
 	"time"
 
+	"github.com/knadh/listmonk/internal/captcha"
 	"github.com/labstack/echo/v4"
+	null "gopkg.in/volatiletech/null.v6"
 )
 
 type serverConfig struct {
-	RootURL       string          `json:"root_url"`
-	FromEmail     string          `json:"from_email"`
+	RootURL            string `json:"root_url"`
+	FromEmail          string `json:"from_email"`
+	PublicSubscription struct {
+		Enabled          bool        `json:"enabled"`
+		CaptchaEnabled   bool        `json:"captcha_enabled"`
+		CaptchaProvider  null.String `json:"captcha_provider"`
+		CaptchaKey       null.String `json:"captcha_key"`
+		AltchaComplexity int         `json:"altcha_complexity"`
+	} `json:"public_subscription"`
 	Messengers    []string        `json:"messengers"`
 	Langs         []i18nLang      `json:"langs"`
 	Lang          string          `json:"lang"`
@@ -24,55 +32,54 @@ type serverConfig struct {
 	Version       string          `json:"version"`
 }
 
-// handleGetServerConfig returns general server config.
-func handleGetServerConfig(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
+// GetServerConfig returns general server config.
+func (a *App) GetServerConfig(c echo.Context) error {
 	out := serverConfig{
-		RootURL:       app.constants.RootURL,
-		FromEmail:     app.constants.FromEmail,
-		Lang:          app.constants.Lang,
-		Permissions:   app.constants.PermissionsRaw,
-		HasLegacyUser: app.constants.HasLegacyUser,
+		RootURL:       a.urlCfg.RootURL,
+		FromEmail:     a.cfg.FromEmail,
+		Lang:          a.cfg.Lang,
+		Permissions:   a.cfg.PermissionsRaw,
+		HasLegacyUser: a.cfg.HasLegacyUser,
+	}
+	out.PublicSubscription.Enabled = a.cfg.EnablePublicSubPage
+
+	// CAPTCHA.
+	if a.cfg.Security.Captcha.Altcha.Enabled {
+		out.PublicSubscription.CaptchaEnabled = true
+		out.PublicSubscription.CaptchaProvider = null.StringFrom(captcha.ProviderAltcha)
+		out.PublicSubscription.AltchaComplexity = a.cfg.Security.Captcha.Altcha.Complexity
+	} else if a.cfg.Security.Captcha.HCaptcha.Enabled {
+		out.PublicSubscription.CaptchaEnabled = true
+		out.PublicSubscription.CaptchaProvider = null.StringFrom(captcha.ProviderHCaptcha)
+		out.PublicSubscription.CaptchaKey = null.StringFrom(a.cfg.Security.Captcha.HCaptcha.Key)
 	}
 
 	// Language list.
-	langList, err := getI18nLangList(app.constants.Lang, app)
+	langList, err := getI18nLangList(a.fs)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError,
 			fmt.Sprintf("Error loading language list: %v", err))
 	}
 	out.Langs = langList
 
-	// Sort messenger names with `email` always as the first item.
-	var names []string
-	for name := range app.messengers {
-		if name == emailMsgr {
-			continue
-		}
-		names = append(names, name)
+	out.Messengers = make([]string, 0, len(a.messengers))
+	for _, m := range a.messengers {
+		out.Messengers = append(out.Messengers, m.Name())
 	}
-	sort.Strings(names)
-	out.Messengers = append(out.Messengers, emailMsgr)
-	out.Messengers = append(out.Messengers, names...)
 
-	app.Lock()
-	out.NeedsRestart = app.needsRestart
-	out.Update = app.update
-	app.Unlock()
+	a.Lock()
+	out.NeedsRestart = a.needsRestart
+	out.Update = a.update
+	a.Unlock()
 	out.Version = versionString
 
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleGetDashboardCharts returns chart data points to render ont he dashboard.
-func handleGetDashboardCharts(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
-
-	out, err := app.core.GetDashboardCharts()
+// GetDashboardCharts returns chart data points to render ont he dashboard.
+func (a *App) GetDashboardCharts(c echo.Context) error {
+	// Get the chart data from the DB.
+	out, err := a.core.GetDashboardCharts()
 	if err != nil {
 		return err
 	}
@@ -80,13 +87,10 @@ func handleGetDashboardCharts(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleGetDashboardCounts returns stats counts to show on the dashboard.
-func handleGetDashboardCounts(c echo.Context) error {
-	var (
-		app = c.Get("app").(*App)
-	)
-
-	out, err := app.core.GetDashboardCounts()
+// GetDashboardCounts returns stats counts to show on the dashboard.
+func (a *App) GetDashboardCounts(c echo.Context) error {
+	// Get the chart data from the DB.
+	out, err := a.core.GetDashboardCounts()
 	if err != nil {
 		return err
 	}
@@ -94,12 +98,14 @@ func handleGetDashboardCounts(c echo.Context) error {
 	return c.JSON(http.StatusOK, okResp{out})
 }
 
-// handleReloadApp restarts the app.
-func handleReloadApp(c echo.Context) error {
-	app := c.Get("app").(*App)
+// ReloadApp sends a reload signal to the app, causing a full restart.
+func (a *App) ReloadApp(c echo.Context) error {
 	go func() {
 		<-time.After(time.Millisecond * 500)
-		app.chReload <- syscall.SIGHUP
+
+		// Send the reload signal to trigger the wait loop in main.
+		a.chReload <- syscall.SIGHUP
 	}()
+
 	return c.JSON(http.StatusOK, okResp{true})
 }

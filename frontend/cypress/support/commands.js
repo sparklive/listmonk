@@ -1,4 +1,5 @@
 import 'cypress-file-upload';
+import 'cypress-wait-until';
 
 Cypress.Commands.add('resetDB', () => {
   // Although cypress clearly states that a webserver should not be run
@@ -51,12 +52,28 @@ Cypress.Commands.add('iframe', { prevSubject: 'element' }, ($iframe, callback = 
   .then((iframe) => cy.wrap(iframe.contents().find('body')))
   .within({}, callback));
 
+Cypress.Commands.add('waitForBackend', () => {
+  // Silence all network errors during wait
+  cy.intercept('*', { continueOnNetworkError: true });
+
+  // Keep trying until backend responds successfully
+  cy.waitUntil(
+    () => cy.request({
+      url: '/api/health',
+      failOnStatusCode: false,
+    }).then((res) =>
+      // Re-enable exception handling once backend is healthy
+      res.status === 200),
+    {
+      timeout: 60000,
+      interval: 2000,
+    },
+  );
+});
+
 Cypress.on('uncaught:exception', (err, runnable) => {
   if (err.hasOwnProperty('request')) {
-    const u = err.request.url;
-    if (u.includes('config') || u.includes('settings') || u.includes('events')) {
-      return false;
-    }
+    return false;
   }
 
   return true;

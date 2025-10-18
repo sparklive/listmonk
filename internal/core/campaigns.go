@@ -23,7 +23,7 @@ const (
 
 // QueryCampaigns retrieves paginated campaigns optionally filtering them by the given arbitrary
 // query expression. It also returns the total number of records in the DB.
-func (c *Core) QueryCampaigns(searchStr string, statuses, tags []string, orderBy, order string, offset, limit int) (models.Campaigns, int, error) {
+func (c *Core) QueryCampaigns(searchStr string, statuses, tags []string, orderBy, order string, getAll bool, permittedLists []int, offset, limit int) (models.Campaigns, int, error) {
 	queryStr, stmt := makeSearchQuery(searchStr, orderBy, order, c.q.QueryCampaigns, campQuerySortFields)
 
 	if statuses == nil {
@@ -36,13 +36,13 @@ func (c *Core) QueryCampaigns(searchStr string, statuses, tags []string, orderBy
 
 	// Unsafe to ignore scanning fields not present in models.Campaigns.
 	var out models.Campaigns
-	if err := c.db.Select(&out, stmt, 0, pq.StringArray(statuses), pq.StringArray(tags), queryStr, offset, limit); err != nil {
+	if err := c.db.Select(&out, stmt, 0, pq.StringArray(statuses), pq.StringArray(tags), queryStr, getAll, pq.Array(permittedLists), offset, limit); err != nil {
 		c.log.Printf("error fetching campaigns: %v", err)
 		return nil, 0, echo.NewHTTPError(http.StatusInternalServerError,
 			c.i18n.Ts("globals.messages.errorFetching", "name", "{globals.terms.campaign}", "error", pqErrMsg(err)))
 	}
 
-	for i := 0; i < len(out); i++ {
+	for i := range out {
 		// Replace null tags.
 		if out[i].Tags == nil {
 			out[i].Tags = []string{}
@@ -89,7 +89,7 @@ func (c *Core) GetArchivedCampaign(id int, uuid, archiveSlug string) (models.Cam
 // the archive template is returned.
 func (c *Core) getCampaign(id int, uuid, archiveSlug string, tplType string) (models.Campaign, error) {
 	// Unsafe to ignore scanning fields not present in models.Campaigns.
-	var uu interface{}
+	var uu any
 	if uuid != "" {
 		uu = uuid
 	}
@@ -124,7 +124,8 @@ func (c *Core) getCampaign(id int, uuid, archiveSlug string, tplType string) (mo
 	return out[0], nil
 }
 
-// GetCampaignForPreview retrieves a campaign with a template body.
+// GetCampaignForPreview retrieves a campaign with a template body. If the optional tplID is > 0
+// that particular template is used, otherwise, the template saved on the campaign is.
 func (c *Core) GetCampaignForPreview(id, tplID int) (models.Campaign, error) {
 	var out models.Campaign
 	if err := c.q.GetCampaignForPreview.Get(&out, id, tplID); err != nil {
@@ -189,6 +190,7 @@ func (c *Core) CreateCampaign(o models.Campaign, listIDs []int, mediaIDs []int) 
 		o.ArchiveTemplateID,
 		o.ArchiveMeta,
 		pq.Array(mediaIDs),
+		o.BodySource,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return models.Campaign{}, echo.NewHTTPError(http.StatusBadRequest, c.i18n.T("campaigns.noSubs"))
@@ -208,7 +210,7 @@ func (c *Core) CreateCampaign(o models.Campaign, listIDs []int, mediaIDs []int) 
 }
 
 // UpdateCampaign updates a campaign.
-func (c *Core) UpdateCampaign(id int, o models.Campaign, listIDs []int, mediaIDs []int, sendLater bool) (models.Campaign, error) {
+func (c *Core) UpdateCampaign(id int, o models.Campaign, listIDs []int, mediaIDs []int) (models.Campaign, error) {
 	_, err := c.q.UpdateCampaign.Exec(id,
 		o.Name,
 		o.Subject,
@@ -217,7 +219,6 @@ func (c *Core) UpdateCampaign(id int, o models.Campaign, listIDs []int, mediaIDs
 		o.AltBody,
 		o.ContentType,
 		o.SendAt,
-		sendLater,
 		o.Headers,
 		pq.StringArray(normalizeTags(o.Tags)),
 		o.Messenger,
@@ -227,7 +228,8 @@ func (c *Core) UpdateCampaign(id int, o models.Campaign, listIDs []int, mediaIDs
 		o.ArchiveSlug,
 		o.ArchiveTemplateID,
 		o.ArchiveMeta,
-		pq.Array(mediaIDs))
+		pq.Array(mediaIDs),
+		o.BodySource)
 	if err != nil {
 		c.log.Printf("error updating campaign: %v", err)
 		return models.Campaign{}, echo.NewHTTPError(http.StatusInternalServerError,
@@ -256,7 +258,7 @@ func (c *Core) UpdateCampaignStatus(id int, status string) (models.Campaign, err
 			errMsg = c.i18n.T("campaigns.onlyScheduledAsDraft")
 		}
 	case models.CampaignStatusScheduled:
-		if cm.Status != models.CampaignStatusDraft {
+		if cm.Status != models.CampaignStatusDraft && cm.Status != models.CampaignStatusPaused {
 			errMsg = c.i18n.T("campaigns.onlyDraftAsScheduled")
 		}
 		if !cm.SendAt.Valid {
@@ -326,6 +328,18 @@ func (c *Core) DeleteCampaign(id int) error {
 	}
 
 	return nil
+}
+
+// CampaignHasLists checks if a campaign has any of the given list IDs.
+func (c *Core) CampaignHasLists(id int, listIDs []int) (bool, error) {
+	has := false
+	if err := c.q.CampaignHasLists.Get(&has, id, pq.Array(listIDs)); err != nil {
+		c.log.Printf("error checking campaign lists: %v", err)
+		return false, echo.NewHTTPError(http.StatusInternalServerError,
+			c.i18n.Ts("globals.messages.errorFetching", "name", "{globals.terms.campaign}", "error", pqErrMsg(err)))
+	}
+
+	return has, nil
 }
 
 // GetRunningCampaignStats returns the progress stats of running campaigns.

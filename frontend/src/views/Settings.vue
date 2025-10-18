@@ -154,9 +154,9 @@ export default Vue.extend({
         hasDummy = 'sendgrid';
       }
 
-      if (this.isDummy(form['security.captcha_secret'])) {
-        form['security.captcha_secret'] = '';
-      } else if (this.hasDummy(form['security.captcha_secret'])) {
+      if (this.isDummy(form['security.captcha'].hcaptcha.secret)) {
+        form['security.captcha'].hcaptcha.secret = '';
+      } else if (this.hasDummy(form['security.captcha'].hcaptcha.secret)) {
         hasDummy = 'captcha';
       }
 
@@ -194,10 +194,11 @@ export default Vue.extend({
 
       // Domain blocklist array from multi-line strings.
       form['privacy.domain_blocklist'] = form['privacy.domain_blocklist'].split('\n').map((v) => v.trim().toLowerCase()).filter((v) => v !== '');
+      form['privacy.domain_allowlist'] = form['privacy.domain_allowlist'].split('\n').map((v) => v.trim().toLowerCase()).filter((v) => v !== '');
 
       this.isLoading = true;
       this.$api.updateSettings(form).then((data) => {
-        if (data.needsRestart) {
+        if (typeof data === 'object' && data !== null && data.needsRestart) {
           // There are running campaigns and the app didn't auto restart.
           // The UI will show a warning.
           this.$root.loadConfig();
@@ -227,7 +228,13 @@ export default Vue.extend({
     getSettings() {
       this.isLoading = true;
       this.$api.getSettings().then((data) => {
-        const d = JSON.parse(JSON.stringify(data));
+        let d = {};
+        try {
+          // Create a deep-copy of the settings hierarchy.
+          d = JSON.parse(JSON.stringify(data));
+        } catch (err) {
+          return;
+        }
 
         // Serialize the `email_headers` array map to display on the form.
         for (let i = 0; i < d.smtp.length; i += 1) {
@@ -236,6 +243,7 @@ export default Vue.extend({
 
         // Domain blocklist array to multi-line string.
         d['privacy.domain_blocklist'] = d['privacy.domain_blocklist'].join('\n');
+        d['privacy.domain_allowlist'] = d['privacy.domain_allowlist'].join('\n');
 
         this.key += 1;
         this.form = d;

@@ -33,7 +33,7 @@ The bounce webhook API can be used to record bounce events with custom scripting
  
 
 ```shell
-curl -u curl -u 'api_username:access_token' -X POST 'http://localhost:9000/webhooks/bounce' \
+curl -u 'api_username:access_token' -X POST 'http://localhost:9000/webhooks/bounce' \
 	-H "Content-Type: application/json" \
 	--data '{"email": "user1@mail.com", "campaign_uuid": "9f86b50d-5711-41c8-ab03-bc91c43d711b", "source": "api", "type": "hard", "meta": "{\"additional\": \"info\"}}'
 
@@ -74,7 +74,7 @@ If using SES as your SMTP provider, automatic bounce processing is the recommend
     - Endpoint: `https://listmonk.yoursite.com/webhooks/service/ses`
     - Enable raw message delivery: `Disabled` (unchecked)
 4. SES will then make a request to your listmonk instance to confirm the subscription. After a page refresh, the subscription should have a status of "Confirmed". If not, your endpoint may be incorrect or not publicly accessible.
-5. In the AWS console, go to [Simple Email Service](https://console.aws.amazon.com/ses/) and click "Verified identities" in the left sidebar.
+5. In the AWS console, go to [Simple Email Service](https://console.aws.amazon.com/ses/) and click "Identities" in the left sidebar.
 6. Click your domain and go to the "Notifications" tab.
 7. Next to "Feedback notifications", click "Edit".
 8. For both "Bounce feedback" and "Complaint feedback", use the following settings:

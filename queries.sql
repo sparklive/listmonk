@@ -190,6 +190,7 @@ INSERT INTO subscriber_lists (subscriber_id, list_id, status)
             -- When subscriber is edited from the admin form, retain the status. Otherwise, a blocklisted
             -- subscriber when being re-enabled, their subscription statuses change.
             WHEN subscriber_lists.status = 'confirmed' THEN 'confirmed'
+            WHEN subscriber_lists.status = 'unsubscribed' THEN 'unsubscribed'::subscription_status
             ELSE $8::subscription_status
         END
     );
@@ -309,7 +310,6 @@ SELECT (SELECT email FROM prof) as email,
 -- there's a COUNT() OVER() that still returns the total result count
 -- for pagination in the frontend, albeit being a field that'll repeat
 -- with every resultant row.
--- %s = arbitrary expression, %s = order by field, %s = order direction
 SELECT subscribers.* FROM subscribers
     LEFT JOIN subscriber_lists
     ON (
@@ -319,8 +319,9 @@ SELECT subscribers.* FROM subscribers
         AND ($2 = '' OR subscriber_lists.status = $2::subscription_status)
     )
     WHERE (CARDINALITY($1) = 0 OR subscriber_lists.list_id = ANY($1::INT[]))
-    %query%
-    ORDER BY %order% OFFSET $3 LIMIT (CASE WHEN $4 < 1 THEN NULL ELSE $4 END);
+    AND (CASE WHEN $3 != '' THEN name ~* $3 OR email ~* $3 ELSE TRUE END)
+    AND %query%
+    ORDER BY %order% OFFSET $4 LIMIT (CASE WHEN $5 < 1 THEN NULL ELSE $5 END);
 
 -- name: query-subscribers-count
 -- Replica of query-subscribers for obtaining the results count.
@@ -332,7 +333,9 @@ SELECT COUNT(*) AS total FROM subscribers
         AND subscriber_lists.subscriber_id = subscribers.id
         AND ($2 = '' OR subscriber_lists.status = $2::subscription_status)
     )
-    WHERE (CARDINALITY($1) = 0 OR subscriber_lists.list_id = ANY($1::INT[])) %s;
+    WHERE (CARDINALITY($1) = 0 OR subscriber_lists.list_id = ANY($1::INT[]))
+    AND (CASE WHEN $3 != '' THEN name ~* $3 OR email ~* $3 ELSE TRUE END)
+    AND %query%;
 
 -- name: query-subscribers-count-all
 -- Cached query for getting the "all" subscriber count without arbitrary conditions.
@@ -344,7 +347,6 @@ SELECT COALESCE(SUM(subscriber_count), 0) AS total FROM mat_list_subscriber_stat
 -- raw: true
 -- Unprepared statement for issuring arbitrary WHERE conditions for
 -- searching subscribers to do bulk CSV export.
--- %s = arbitrary expression
 SELECT subscribers.id,
        subscribers.uuid,
        subscribers.email,
@@ -363,8 +365,9 @@ SELECT subscribers.id,
     )
     WHERE subscriber_lists.list_id = ALL($1::INT[]) AND id > $2
     AND (CASE WHEN CARDINALITY($3::INT[]) > 0 THEN id=ANY($3) ELSE true END)
-    %query%
-    ORDER BY subscribers.id ASC LIMIT (CASE WHEN $5 < 1 THEN NULL ELSE $5 END);
+    AND (CASE WHEN $5 != '' THEN name ~* $5 OR email ~* $5 ELSE TRUE END)
+    AND %query%
+    ORDER BY subscribers.id ASC LIMIT (CASE WHEN $6 < 1 THEN NULL ELSE $6 END);
 
 -- name: query-subscribers-template
 -- raw: true
@@ -374,7 +377,7 @@ SELECT subscribers.id,
 --
 -- All queries that embed this query should expect
 -- $1=true/false (dry-run or not) and $2=[]INT (option list IDs).
--- That is, their positional arguments should start from $3.
+-- That is, their positional arguments should start from $4.
 SELECT subscribers.id FROM subscribers
 LEFT JOIN subscriber_lists
 ON (
@@ -383,17 +386,19 @@ ON (
     AND subscriber_lists.subscriber_id = subscribers.id
     AND ($3 = '' OR subscriber_lists.status = $3::subscription_status)
 )
-WHERE subscriber_lists.list_id = ALL($2::INT[]) %s
+WHERE subscriber_lists.list_id = ALL($2::INT[])
+    AND (CASE WHEN $4 != '' THEN name ~* $4 OR email ~* $4 ELSE TRUE END)
+    AND %query%
 LIMIT (CASE WHEN $1 THEN 1 END)
 
 -- name: delete-subscribers-by-query
 -- raw: true
-WITH subs AS (%s)
+WITH subs AS (%query%)
 DELETE FROM subscribers WHERE id=ANY(SELECT id FROM subs);
 
 -- name: blocklist-subscribers-by-query
 -- raw: true
-WITH subs AS (%s),
+WITH subs AS (%query%),
 b AS (
     UPDATE subscribers SET status='blocklisted', updated_at=NOW()
     WHERE id = ANY(SELECT id FROM subs)
@@ -403,22 +408,22 @@ UPDATE subscriber_lists SET status='unsubscribed', updated_at=NOW()
 
 -- name: add-subscribers-to-lists-by-query
 -- raw: true
-WITH subs AS (%s)
+WITH subs AS (%query%)
 INSERT INTO subscriber_lists (subscriber_id, list_id, status)
-    (SELECT a, b, (CASE WHEN $5 != '' THEN $5::subscription_status ELSE 'unconfirmed' END) FROM UNNEST(ARRAY(SELECT id FROM subs)) a, UNNEST($4::INT[]) b)
+    (SELECT a, b, (CASE WHEN $6 != '' THEN $6::subscription_status ELSE 'unconfirmed' END) FROM UNNEST(ARRAY(SELECT id FROM subs)) a, UNNEST($5::INT[]) b)
     ON CONFLICT (subscriber_id, list_id) DO NOTHING;
 
 -- name: delete-subscriptions-by-query
 -- raw: true
-WITH subs AS (%s)
+WITH subs AS (%query%)
 DELETE FROM subscriber_lists
-    WHERE (subscriber_id, list_id) = ANY(SELECT a, b FROM UNNEST(ARRAY(SELECT id FROM subs)) a, UNNEST($4::INT[]) b);
+    WHERE (subscriber_id, list_id) = ANY(SELECT a, b FROM UNNEST(ARRAY(SELECT id FROM subs)) a, UNNEST($5::INT[]) b);
 
 -- name: unsubscribe-subscribers-from-lists-by-query
 -- raw: true
-WITH subs AS (%s)
+WITH subs AS (%query%)
 UPDATE subscriber_lists SET status='unsubscribed', updated_at=NOW()
-    WHERE (subscriber_id, list_id) = ANY(SELECT a, b FROM UNNEST(ARRAY(SELECT id FROM subs)) a, UNNEST($4::INT[]) b);
+    WHERE (subscriber_id, list_id) = ANY(SELECT a, b FROM UNNEST(ARRAY(SELECT id FROM subs)) a, UNNEST($5::INT[]) b);
 
 
 -- lists
@@ -432,7 +437,7 @@ SELECT * FROM lists WHERE (CASE WHEN $1 = '' THEN 1=1 ELSE type=$1::list_type EN
 
 -- name: query-lists
 WITH ls AS (
-	SELECT COUNT(*) OVER () AS total, lists.* FROM lists WHERE
+    SELECT COUNT(*) OVER () AS total, lists.* FROM lists WHERE
     CASE
         WHEN $1 > 0 THEN id = $1
         WHEN $2 != '' THEN uuid = $2::UUID
@@ -451,11 +456,12 @@ WITH ls AS (
 statuses AS (
     SELECT
         list_id,
-        COALESCE(JSONB_OBJECT_AGG(status, subscriber_count) FILTER (WHERE status IS NOT NULL), '{}') AS subscriber_statuses
+        COALESCE(JSONB_OBJECT_AGG(status, subscriber_count) FILTER (WHERE status IS NOT NULL), '{}') AS subscriber_statuses,
+        SUM(subscriber_count) AS subscriber_count
     FROM mat_list_subscriber_stats
     GROUP BY list_id
 )
-SELECT ls.*, COALESCE(ss.subscriber_statuses, '{}') AS subscriber_statuses
+SELECT ls.*, COALESCE(ss.subscriber_statuses, '{}') AS subscriber_statuses, COALESCE(ss.subscriber_count, 0) AS subscriber_count
     FROM ls LEFT JOIN statuses ss ON (ls.id = ss.list_id) ORDER BY %order%;
 
 -- name: get-lists-by-optin
@@ -464,6 +470,13 @@ SELECT * FROM lists WHERE (CASE WHEN $1 != '' THEN optin=$1::list_optin ELSE TRU
     (CASE WHEN $2::INT[] IS NOT NULL THEN id = ANY($2::INT[])
           WHEN $3::UUID[] IS NOT NULL THEN uuid = ANY($3::UUID[])
     END) ORDER BY name;
+
+-- name: get-list-types
+-- Retrieves the private|public type of lists by ID or uuid. Used for filtering.
+SELECT id, uuid, type FROM lists WHERE
+    (CASE WHEN $1::INT[] IS NOT NULL THEN id = ANY($1::INT[])
+          WHEN $2::UUID[] IS NOT NULL THEN uuid = ANY($2::UUID[])
+    END);
 
 -- name: create-list
 INSERT INTO lists (uuid, name, type, optin, tags, description) VALUES($1, $2, $3, $4, $5, $6) RETURNING id;
@@ -489,8 +502,25 @@ DELETE FROM lists WHERE id = ALL($1);
 -- name: create-campaign
 -- This creates the campaign and inserts campaign_lists relationships.
 WITH tpl AS (
-    -- If there's no template_id given, use the default template.
-    SELECT (CASE WHEN $13 = 0 THEN id ELSE $13 END) AS id FROM templates WHERE is_default IS TRUE
+    -- Select the template for the given template ID or use the default template.
+    SELECT
+        -- If the template is a visual template, then use it's HTML body as the campaign
+        -- body and its block source as the campaign's block source,
+        -- and don't set a template_id in the campaigns table, as it's essentially an
+        -- HTML template body "import" during creation.
+        (CASE WHEN type = 'campaign_visual' THEN NULL ELSE id END) AS id,
+        (CASE WHEN type = 'campaign_visual' THEN body ELSE '' END) AS body,
+        (CASE WHEN type = 'campaign_visual' THEN body_source ELSE NULL END) AS body_source,
+        (CASE WHEN type = 'campaign_visual' THEN 'visual' ELSE 'richtext' END) AS content_type
+    FROM templates
+    WHERE
+        CASE
+            -- If a template ID is present, use it. If not, use the default template only if
+            -- it's not a visual template.
+            WHEN $13::INT IS NOT NULL THEN id = $13::INT
+            ELSE $8 != 'visual' AND is_default = TRUE
+        END
+    LIMIT 1
 ),
 counts AS (
     -- This is going to be slow on large databases.
@@ -507,11 +537,24 @@ counts AS (
       )
 ),
 camp AS (
-    INSERT INTO campaigns (uuid, type, name, subject, from_email, body, altbody, content_type, send_at, headers, tags, messenger, template_id, to_send, max_subscriber_id, archive, archive_slug, archive_template_id, archive_meta)
-        SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-            (SELECT id FROM tpl), (SELECT to_send FROM counts),
-            (SELECT max_sub_id FROM counts), $15, $16,
-            (CASE WHEN $17 = 0 THEN (SELECT id FROM tpl) ELSE $17 END), $18
+    INSERT INTO campaigns (uuid, type, name, subject, from_email, body, altbody,
+        content_type, send_at, headers, tags, messenger, template_id, to_send,
+        max_subscriber_id, archive, archive_slug, archive_template_id, archive_meta, body_source)
+        SELECT $1, $2, $3, $4, $5,
+            -- body
+            COALESCE(NULLIF($6, ''), (SELECT body FROM tpl), ''),
+            $7,
+            $8::content_type,
+            $9, $10, $11, $12,
+            (SELECT id FROM tpl),
+            (SELECT to_send FROM counts),
+            (SELECT max_sub_id FROM counts),
+            $15, $16,
+            -- archive_template_id
+            $17,
+            $18,
+            -- body_source
+            COALESCE($20, (SELECT body_source FROM tpl))
         RETURNING id
 ),
 med AS (
@@ -531,11 +574,7 @@ SELECT id FROM camp;
 -- there's a COUNT() OVER() that still returns the total result count
 -- for pagination in the frontend, albeit being a field that'll repeat
 -- with every resultant row.
-SELECT  c.id, c.uuid, c.name, c.subject, c.from_email,
-        c.messenger, c.started_at, c.to_send, c.sent, c.type,
-        c.body, c.altbody, c.send_at, c.headers, c.status, c.content_type, c.tags,
-        c.template_id, c.archive, c.archive_slug, c.archive_template_id, c.archive_meta,
-        c.created_at, c.updated_at,
+SELECT  c.*,
         COUNT(*) OVER () AS total,
         (
             SELECT COALESCE(ARRAY_TO_JSON(ARRAY_AGG(l)), '[]') FROM (
@@ -549,11 +588,17 @@ WHERE ($1 = 0 OR id = $1)
     AND (CARDINALITY($2::campaign_status[]) = 0 OR status = ANY($2))
     AND (CARDINALITY($3::VARCHAR(100)[]) = 0 OR $3 <@ tags)
     AND ($4 = '' OR TO_TSVECTOR(CONCAT(name, ' ', subject)) @@ TO_TSQUERY($4) OR CONCAT(c.name, ' ', c.subject) ILIKE $4)
-ORDER BY %order% OFFSET $5 LIMIT (CASE WHEN $6 < 1 THEN NULL ELSE $6 END);
+    -- Get all campaigns or filter by list IDs.
+    AND (
+        $5 OR EXISTS (
+            SELECT 1 FROM campaign_lists WHERE campaign_id = c.id AND list_id = ANY($6::INT[])
+        )
+    )
+ORDER BY %order% OFFSET $7 LIMIT (CASE WHEN $8 < 1 THEN NULL ELSE $8 END);
 
 -- name: get-campaign
 SELECT campaigns.*,
-    COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1)) AS template_body
+    COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1), '') AS template_body
     FROM campaigns
     LEFT JOIN templates ON (
         CASE WHEN $4 = 'default' THEN templates.id = campaigns.template_id
@@ -567,7 +612,7 @@ SELECT campaigns.*,
 
 -- name: get-archived-campaigns
 SELECT COUNT(*) OVER () AS total, campaigns.*,
-    COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1)) AS template_body
+    COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1), '') AS template_body
     FROM campaigns
     LEFT JOIN templates ON (
         CASE WHEN $3 = 'default' THEN templates.id = campaigns.template_id
@@ -619,7 +664,7 @@ LEFT JOIN bounces AS b ON (b.campaign_id = id)
 ORDER BY ARRAY_POSITION($1, id);
 
 -- name: get-campaign-for-preview
-SELECT campaigns.*, COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1)) AS template_body,
+SELECT campaigns.*, COALESCE(templates.body, '') AS template_body,
 (
 	SELECT COALESCE(ARRAY_TO_JSON(ARRAY_AGG(l)), '[]') FROM (
 		SELECT COALESCE(campaign_lists.list_id, 0) AS id,
@@ -632,9 +677,13 @@ LEFT JOIN templates ON (templates.id = (CASE WHEN $2=0 THEN campaigns.template_i
 WHERE campaigns.id = $1;
 
 -- name: get-campaign-status
-SELECT id, status, to_send, sent, started_at, updated_at
-    FROM campaigns
-    WHERE status=$1;
+SELECT id, status, to_send, sent, started_at, updated_at FROM campaigns WHERE status=$1;
+
+-- name: campaign-has-lists
+-- Returns TRUE if the campaign $1 has any of the lists given in $2.
+SELECT EXISTS (
+    SELECT TRUE FROM campaign_lists WHERE campaign_id = $1 AND list_id = ANY($2::INT[])
+);
 
 -- name: next-campaigns
 -- Retreives campaigns that are running (or scheduled and the time's up) and need
@@ -645,7 +694,7 @@ SELECT id, status, to_send, sent, started_at, updated_at
 -- a campaign. This is used to fetch and slice subscribers for the campaign in next-campaign-subscribers.
 WITH camps AS (
     -- Get all running campaigns and their template bodies (if the template's deleted, the default template body instead)
-    SELECT campaigns.*, COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1)) AS template_body
+    SELECT campaigns.*, COALESCE(templates.body, (SELECT body FROM templates WHERE is_default = true LIMIT 1), '') AS template_body
     FROM campaigns
     LEFT JOIN templates ON (templates.id = campaigns.template_id)
     WHERE (status='running' OR (status='scheduled' AND NOW() >= campaigns.send_at))
@@ -829,33 +878,40 @@ WITH camp AS (
         altbody=(CASE WHEN $6 = '' THEN NULL ELSE $6 END),
         content_type=$7::content_type,
         send_at=$8::TIMESTAMP WITH TIME ZONE,
-        status=(CASE WHEN NOT $9 THEN 'draft' ELSE status END),
-        headers=$10,
-        tags=$11::VARCHAR(100)[],
-        messenger=$12,
-        template_id=$13,
-        archive=$15,
-        archive_slug=$16,
-        archive_template_id=$17,
-        archive_meta=$18,
+        status=(
+            CASE
+                WHEN status = 'scheduled' AND $8 IS NULL THEN 'draft'
+                ELSE status
+            END
+        ),
+        headers=$9,
+        tags=$10::VARCHAR(100)[],
+        messenger=$11,
+        -- template_id shouldn't be saved for visual campaigns.
+        template_id=(CASE WHEN $7::content_type = 'visual' THEN NULL ELSE $12::INT END),
+        archive=$14,
+        archive_slug=$15,
+        archive_template_id=(CASE WHEN $7::content_type = 'visual' THEN NULL ELSE $16::INT END),
+        archive_meta=$17,
+        body_source=$19,
         updated_at=NOW()
     WHERE id = $1 RETURNING id
 ),
 clists AS (
     -- Reset list relationships
-    DELETE FROM campaign_lists WHERE campaign_id = $1 AND NOT(list_id = ANY($14))
+    DELETE FROM campaign_lists WHERE campaign_id = $1 AND NOT(list_id = ANY($13))
 ),
 med AS (
     DELETE FROM campaign_media WHERE campaign_id = $1
-    AND ( media_id IS NULL or NOT(media_id = ANY($19))) RETURNING media_id
+    AND ( media_id IS NULL or NOT(media_id = ANY($18))) RETURNING media_id
 ),
 medi AS (
     INSERT INTO campaign_media (campaign_id, media_id, filename)
-        (SELECT $1 AS campaign_id, id, filename FROM media WHERE id=ANY($19::INT[]))
+        (SELECT $1 AS campaign_id, id, filename FROM media WHERE id=ANY($18::INT[]))
         ON CONFLICT (campaign_id, media_id) DO NOTHING
 )
 INSERT INTO campaign_lists (campaign_id, list_id, list_name)
-    (SELECT $1 as campaign_id, id, name FROM lists WHERE id=ANY($14::INT[]))
+    (SELECT $1 as campaign_id, id, name FROM lists WHERE id=ANY($13::INT[]))
     ON CONFLICT (campaign_id, list_id) DO UPDATE SET list_name = EXCLUDED.list_name;
 
 -- name: update-campaign-counts
@@ -867,7 +923,15 @@ UPDATE campaigns SET
 WHERE id=$1;
 
 -- name: update-campaign-status
-UPDATE campaigns SET status=$2, updated_at=NOW() WHERE id = $1;
+UPDATE campaigns SET
+    status=(
+        CASE
+            WHEN send_at IS NOT NULL AND $2 = 'running' THEN 'scheduled'
+            ELSE $2::campaign_status
+        END
+    ),
+    updated_at=NOW()
+WHERE id = $1;
 
 -- name: update-campaign-archive
 UPDATE campaigns SET
@@ -892,20 +956,23 @@ INSERT INTO campaign_views (campaign_id, subscriber_id)
 
 -- templates
 -- name: get-templates
--- Only if the second param ($2) is true, body is returned.
-SELECT id, name, type, subject, (CASE WHEN $2 = false THEN body ELSE '' END) as body,
+-- Only if the second param ($2 - noBody) is true, body and body_source is returned.
+SELECT id, name, type, subject,
+    (CASE WHEN $2 = false THEN body ELSE '' END) as body,
+    (CASE WHEN $2 = false THEN body_source ELSE NULL END) as body_source,
     is_default, created_at, updated_at
     FROM templates WHERE ($1 = 0 OR id = $1) AND ($3 = '' OR type = $3::template_type)
     ORDER BY created_at;
 
 -- name: create-template
-INSERT INTO templates (name, type, subject, body) VALUES($1, $2, $3, $4) RETURNING id;
+INSERT INTO templates (name, type, subject, body, body_source) VALUES($1, $2, $3, $4, $5) RETURNING id;
 
 -- name: update-template
 UPDATE templates SET
     name=(CASE WHEN $2 != '' THEN $2 ELSE name END),
     subject=(CASE WHEN $3 != '' THEN $3 ELSE name END),
     body=(CASE WHEN $4 != '' THEN $4 ELSE body END),
+    body_source=(CASE WHEN $5 != '' THEN $5 ELSE body_source END),
     updated_at=NOW()
 WHERE id = $1;
 
@@ -922,7 +989,7 @@ WITH tpl AS (
     DELETE FROM templates WHERE id = $1 AND (SELECT COUNT(id) FROM templates) > 1 AND is_default = false RETURNING id
 ),
 def AS (
-    SELECT id FROM templates WHERE is_default = true AND type='campaign' LIMIT 1
+    SELECT id FROM templates WHERE is_default = true AND (type='campaign' OR type='campaign_visual') LIMIT 1
 ),
 up AS (
     UPDATE campaigns SET template_id = (SELECT id FROM def) WHERE (SELECT id FROM tpl) > 0 AND template_id = $1
@@ -939,7 +1006,13 @@ SELECT COUNT(*) OVER () AS total, * FROM media
     WHERE ($1 = '' OR filename ILIKE $1) AND provider=$2 ORDER BY created_at DESC OFFSET $3 LIMIT $4;
 
 -- name: get-media
-SELECT * FROM media WHERE CASE WHEN $1 > 0 THEN id = $1 ELSE uuid = $2 END;
+SELECT * FROM media WHERE
+    CASE
+        WHEN $1 > 0 THEN id = $1
+        WHEN $2 != '' THEN uuid = $2::UUID
+        WHEN $3 != '' THEN filename = $3    
+        ELSE false
+    END;
 
 -- name: delete-media
 DELETE FROM media WHERE id=$1 RETURNING filename;
@@ -1015,7 +1088,7 @@ SELECT COUNT(*) OVER () AS total,
     bounces.subscriber_id,
     subscribers.uuid AS subscriber_uuid,
     subscribers.email AS email,
-    subscribers.email AS email,
+    subscribers.status as subscriber_status,
     (
         CASE WHEN bounces.campaign_id IS NOT NULL
         THEN JSON_BUILD_OBJECT('id', bounces.campaign_id, 'name', campaigns.name)
@@ -1031,7 +1104,7 @@ WHERE ($1 = 0 OR bounces.id = $1)
 ORDER BY %order% OFFSET $5 LIMIT $6;
 
 -- name: delete-bounces
-DELETE FROM bounces WHERE CARDINALITY($1::INT[]) = 0 OR id = ANY($1);
+DELETE FROM bounces WHERE $2 = TRUE OR id = ANY($1);
 
 -- name: delete-bounces-by-subscriber
 WITH sub AS (
@@ -1039,6 +1112,16 @@ WITH sub AS (
 )
 DELETE FROM bounces WHERE subscriber_id = (SELECT id FROM sub);
 
+-- name: blocklist-bounced-subscribers
+WITH subs AS (
+    SELECT subscriber_id FROM bounces
+),
+b AS (
+    UPDATE subscribers SET status='blocklisted', updated_at=NOW()
+    WHERE id = ANY(SELECT subscriber_id FROM subs)
+)
+UPDATE subscriber_lists SET status='unsubscribed', updated_at=NOW()
+    WHERE subscriber_id = ANY(SELECT subscriber_id FROM subs);
 
 -- name: get-db-info
 SELECT JSON_BUILD_OBJECT('version', (SELECT VERSION()),
@@ -1089,7 +1172,7 @@ UPDATE users SET
 
 -- name: delete-users
 WITH u AS (
-    SELECT COUNT(*) AS num FROM users WHERE NOT(id = ANY($1)) AND user_role_id=1 AND status='enabled'
+    SELECT COUNT(*) AS num FROM users WHERE NOT(id = ANY($1)) AND user_role_id=1 AND type='user' AND status='enabled'
 )
 DELETE FROM users WHERE id = ALL($1) AND (SELECT num FROM u) > 0;
 
@@ -1117,7 +1200,7 @@ lp AS (
     LEFT JOIN lists cl ON cr.list_id = cl.id
     GROUP BY lr.id
 )
-SELECT 
+SELECT
     users.*,
     ur.id AS user_role_id,
     ur.name AS user_role_name,
@@ -1143,7 +1226,7 @@ WITH sel AS (
         END
     )
 )
-SELECT 
+SELECT
     sel.*,
     ur.id AS user_role_id,
     ur.name AS user_role_name,
@@ -1196,7 +1279,8 @@ UPDATE users SET loggedin_at=NOW(), avatar=(CASE WHEN $2 != '' THEN $2 ELSE avat
 
 -- name: get-user-roles
 WITH mainroles AS (
-    SELECT ur.* FROM roles ur WHERE type = 'user' AND ur.parent_id IS NULL
+    SELECT ur.* FROM roles ur WHERE type = 'user' AND ur.parent_id IS NULL AND
+    CASE WHEN $1::INT != 0 THEN ur.id = $1 ELSE TRUE END
 ),
 listPerms AS (
     SELECT ur.parent_id, JSONB_AGG(JSONB_BUILD_OBJECT('id', ur.list_id, 'name', lists.name, 'permissions', ur.permissions)) AS listPerms

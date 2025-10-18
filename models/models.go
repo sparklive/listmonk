@@ -48,22 +48,13 @@ const (
 	CampaignContentTypeHTML     = "html"
 	CampaignContentTypeMarkdown = "markdown"
 	CampaignContentTypePlain    = "plain"
+	CampaignContentTypeVisual   = "visual"
 
 	// List.
 	ListTypePrivate = "private"
 	ListTypePublic  = "public"
 	ListOptinSingle = "single"
 	ListOptinDouble = "double"
-
-	// User.
-	UserTypeUser       = "user"
-	UserTypeAPI        = "api"
-	UserStatusEnabled  = "enabled"
-	UserStatusDisabled = "disabled"
-
-	// Role.
-	RoleTypeUser = "user"
-	RoleTypeList = "list"
 
 	// BaseTpl is the name of the base template.
 	BaseTpl = "base"
@@ -88,8 +79,9 @@ const (
 	BounceTypeComplaint = "complaint"
 
 	// Templates.
-	TemplateTypeCampaign = "campaign"
-	TemplateTypeTx       = "tx"
+	TemplateTypeCampaign       = "campaign"
+	TemplateTypeCampaignVisual = "campaign_visual"
+	TemplateTypeTx             = "tx"
 )
 
 // Headers represents an array of string maps used to represent SMTP, HTTP headers etc.
@@ -106,18 +98,20 @@ type regTplFunc struct {
 
 var regTplFuncs = []regTplFunc{
 	// Regular expression for matching {{ TrackLink "http://link.com" }} in the template
-	// and substituting it with {{ Track "http://link.com" . }} (the dot context)
+	// and substituting it with {{ TrackLink "http://link.com" . }} (the dot context)
 	// before compilation. This is to make linking easier for users.
 	{
-		regExp:  regexp.MustCompile("{{(\\s+)?TrackLink(\\s+)?(.+?)(\\s+)?}}"),
-		replace: `{{ TrackLink $3 . }}`,
+		regExp:  regexp.MustCompile(`{{\s*TrackLink\s+"([^"]+)"\s*}}`),
+		replace: `{{ TrackLink "$1" . }}`,
 	},
 
 	// Convert the shorthand https://google.com@TrackLink to {{ TrackLink ... }}.
 	// This is for WYSIWYG editors that encode and break quotes {{ "" }} when inserted
 	// inside <a href="{{ TrackLink "https://these-quotes-break" }}>.
+	// The regex matches all characters that may occur in an URL
+	// (see "2. Characters" in RFC3986: https://www.ietf.org/rfc/rfc3986.txt)
 	{
-		regExp:  regexp.MustCompile(`(https?://.+?)@TrackLink`),
+		regExp:  regexp.MustCompile(`(https?://[\p{L}\p{N}_\-\.~!#$&'()*+,/:;=?@\[\]]*)@TrackLink`),
 		replace: `{{ TrackLink "$1" . }}`,
 	},
 
@@ -127,14 +121,11 @@ var regTplFuncs = []regTplFunc{
 	},
 }
 
-// AdminNotifCallback is a callback function that's called
-// when a campaign's status changes.
-type AdminNotifCallback func(subject string, data interface{}) error
-
 // PageResults is a generic HTTP response container for paginated results of list of items.
 type PageResults struct {
-	Results interface{} `json:"results"`
+	Results any `json:"results"`
 
+	Search  string `json:"search"`
 	Query   string `json:"query"`
 	Total   int    `json:"total"`
 	PerPage int    `json:"per_page"`
@@ -146,88 +137,6 @@ type Base struct {
 	ID        int       `db:"id" json:"id"`
 	CreatedAt null.Time `db:"created_at" json:"created_at"`
 	UpdatedAt null.Time `db:"updated_at" json:"updated_at"`
-}
-
-// User represents an admin user.
-type User struct {
-	Base
-
-	Username string `db:"username" json:"username"`
-
-	// For API users, this is the plaintext API token.
-	Password      null.String `db:"password" json:"password,omitempty"`
-	PasswordLogin bool        `db:"password_login" json:"password_login"`
-	Email         null.String `db:"email" json:"email"`
-	Name          string      `db:"name" json:"name"`
-	Type          string      `db:"type" json:"type"`
-	Status        string      `db:"status" json:"status"`
-	Avatar        null.String `db:"avatar" json:"avatar"`
-	LoggedInAt    null.Time   `db:"loggedin_at" json:"loggedin_at"`
-
-	// Role struct {
-	// 	ID          int              `db:"-" json:"id"`
-	// 	Name        string           `db:"-" json:"name"`
-	// 	Permissions []string         `db:"-" json:"permissions"`
-	// 	Lists       []ListPermission `db:"-" json:"lists"`
-	// } `db:"-" json:"role"`
-
-	// Filled post-retrieval.
-	UserRole struct {
-		ID          int      `db:"-" json:"id"`
-		Name        string   `db:"-" json:"name"`
-		Permissions []string `db:"-" json:"permissions"`
-	} `db:"-" json:"user_role"`
-
-	ListRole *ListRolePermissions `db:"-" json:"list_role"`
-
-	UserRoleID    int              `db:"user_role_id" json:"user_role_id,omitempty"`
-	UserRoleName  string           `db:"user_role_name" json:"-"`
-	ListRoleID    *int             `db:"list_role_id" json:"list_role_id,omitempty"`
-	ListRoleName  null.String      `db:"list_role_name" json:"-"`
-	UserRolePerms pq.StringArray   `db:"user_role_permissions" json:"-"`
-	ListsPermsRaw *json.RawMessage `db:"list_role_perms" json:"-"`
-
-	PermissionsMap     map[string]struct{}         `db:"-" json:"-"`
-	ListPermissionsMap map[int]map[string]struct{} `db:"-" json:"-"`
-	GetListIDs         []int                       `db:"-" json:"-"`
-	ManageListIDs      []int                       `db:"-" json:"-"`
-	HasPassword        bool                        `db:"-" json:"-"`
-}
-
-type ListPermission struct {
-	ID          int            `json:"id"`
-	Name        string         `json:"name"`
-	Permissions pq.StringArray `json:"permissions"`
-}
-
-type ListRolePermissions struct {
-	ID    int              `db:"-" json:"id"`
-	Name  string           `db:"-" json:"name"`
-	Lists []ListPermission `db:"-" json:"lists"`
-}
-
-type Role struct {
-	Base
-
-	Type        string         `db:"type" json:"type"`
-	Name        null.String    `db:"name" json:"name"`
-	Permissions pq.StringArray `db:"permissions" json:"permissions"`
-
-	ListID   null.Int         `db:"list_id" json:"-"`
-	ParentID null.Int         `db:"parent_id" json:"-"`
-	ListsRaw json.RawMessage  `db:"list_permissions" json:"-"`
-	Lists    []ListPermission `db:"-" json:"lists"`
-}
-
-type ListRole struct {
-	Base
-
-	Name null.String `db:"name" json:"name"`
-
-	ListID   null.Int         `db:"list_id" json:"-"`
-	ParentID null.Int         `db:"parent_id" json:"-"`
-	ListsRaw json.RawMessage  `db:"list_permissions" json:"-"`
-	Lists    []ListPermission `db:"-" json:"lists"`
 }
 
 // Subscriber represents an e-mail subscriber.
@@ -264,7 +173,7 @@ type SubscriberExportProfile struct {
 }
 
 // JSON is the wrapper for reading and writing arbitrary JSONB fields from the DB.
-type JSON map[string]interface{}
+type JSON map[string]any
 
 // StringIntMap is used to define DB Scan()s.
 type StringIntMap map[string]int
@@ -293,7 +202,7 @@ type List struct {
 	Optin            string         `db:"optin" json:"optin"`
 	Tags             pq.StringArray `db:"tags" json:"tags"`
 	Description      string         `db:"description" json:"description"`
-	SubscriberCount  int            `db:"-" json:"subscriber_count"`
+	SubscriberCount  int            `db:"subscriber_count" json:"subscriber_count"`
 	SubscriberCounts StringIntMap   `db:"subscriber_statuses" json:"subscriber_statuses"`
 	SubscriberID     int            `db:"subscriber_id" json:"-"`
 
@@ -318,17 +227,18 @@ type Campaign struct {
 	Subject           string          `db:"subject" json:"subject"`
 	FromEmail         string          `db:"from_email" json:"from_email"`
 	Body              string          `db:"body" json:"body"`
+	BodySource        null.String     `db:"body_source" json:"body_source"`
 	AltBody           null.String     `db:"altbody" json:"altbody"`
 	SendAt            null.Time       `db:"send_at" json:"send_at"`
 	Status            string          `db:"status" json:"status"`
 	ContentType       string          `db:"content_type" json:"content_type"`
 	Tags              pq.StringArray  `db:"tags" json:"tags"`
 	Headers           Headers         `db:"headers" json:"headers"`
-	TemplateID        int             `db:"template_id" json:"template_id"`
+	TemplateID        null.Int        `db:"template_id" json:"template_id"`
 	Messenger         string          `db:"messenger" json:"messenger"`
 	Archive           bool            `db:"archive" json:"archive"`
 	ArchiveSlug       null.String     `db:"archive_slug" json:"archive_slug"`
-	ArchiveTemplateID int             `db:"archive_template_id" json:"archive_template_id"`
+	ArchiveTemplateID null.Int        `db:"archive_template_id" json:"archive_template_id"`
 	ArchiveMeta       json.RawMessage `db:"archive_meta" json:"archive_meta"`
 
 	// TemplateBody is joined in from templates by the next-campaigns query.
@@ -401,10 +311,11 @@ type Template struct {
 
 	Name string `db:"name" json:"name"`
 	// Subject is only for type=tx.
-	Subject   string `db:"subject" json:"subject"`
-	Type      string `db:"type" json:"type"`
-	Body      string `db:"body" json:"body,omitempty"`
-	IsDefault bool   `db:"is_default" json:"is_default"`
+	Subject    string      `db:"subject" json:"subject"`
+	Type       string      `db:"type" json:"type"`
+	Body       string      `db:"body" json:"body,omitempty"`
+	BodySource null.String `db:"body_source" json:"body_source,omitempty"`
+	IsDefault  bool        `db:"is_default" json:"is_default"`
 
 	// Only relevant to tx (transactional) templates.
 	SubjectTpl *txttpl.Template   `json:"-"`
@@ -420,9 +331,10 @@ type Bounce struct {
 	CreatedAt time.Time       `db:"created_at" json:"created_at"`
 
 	// One of these should be provided.
-	Email          string `db:"email" json:"email,omitempty"`
-	SubscriberUUID string `db:"subscriber_uuid" json:"subscriber_uuid,omitempty"`
-	SubscriberID   int    `db:"subscriber_id" json:"subscriber_id,omitempty"`
+	Email            string `db:"email" json:"email,omitempty"`
+	SubscriberUUID   string `db:"subscriber_uuid" json:"subscriber_uuid,omitempty"`
+	SubscriberID     int    `db:"subscriber_id" json:"subscriber_id,omitempty"`
+	SubscriberStatus string `db:"subscriber_status" json:"subscriber_status"`
 
 	CampaignUUID string           `db:"campaign_uuid" json:"campaign_uuid,omitempty"`
 	Campaign     *json.RawMessage `db:"campaign" json:"campaign"`
@@ -469,17 +381,17 @@ type TxMessage struct {
 	SubscriberEmail string `json:"subscriber_email"`
 	SubscriberID    int    `json:"subscriber_id"`
 
-	TemplateID  int                    `json:"template_id"`
-	Data        map[string]interface{} `json:"data"`
-	FromEmail   string                 `json:"from_email"`
-	Headers     Headers                `json:"headers"`
-	ContentType string                 `json:"content_type"`
-	Messenger   string                 `json:"messenger"`
+	TemplateID  int            `json:"template_id"`
+	Data        map[string]any `json:"data"`
+	FromEmail   string         `json:"from_email"`
+	Headers     Headers        `json:"headers"`
+	ContentType string         `json:"content_type"`
+	Messenger   string         `json:"messenger"`
+	Subject     string         `json:"subject"`
 
 	// File attachments added from multi-part form data.
 	Attachments []Attachment `json:"-"`
 
-	Subject    string             `json:"-"`
 	Body       []byte             `json:"-"`
 	Tpl        *template.Template `json:"-"`
 	SubjectTpl *txttpl.Template   `json:"-"`
@@ -545,7 +457,7 @@ func (s JSON) Value() (driver.Value, error) {
 }
 
 // Scan unmarshals JSONB from the DB.
-func (s JSON) Scan(src interface{}) error {
+func (s JSON) Scan(src any) error {
 	if src == nil {
 		s = make(JSON)
 		return nil
@@ -558,7 +470,7 @@ func (s JSON) Scan(src interface{}) error {
 }
 
 // Scan unmarshals JSONB from the DB.
-func (s StringIntMap) Scan(src interface{}) error {
+func (s StringIntMap) Scan(src any) error {
 	if src == nil {
 		s = make(StringIntMap)
 		return nil
@@ -614,7 +526,7 @@ func (c *Campaign) CompileTemplate(f template.FuncMap) error {
 			subj = r.regExp.ReplaceAllString(subj, r.replace)
 		}
 
-		var txtFuncs map[string]interface{} = f
+		var txtFuncs map[string]any = f
 		subjTpl, err := txttpl.New(ContentTpl).Funcs(txtFuncs).Parse(subj)
 		if err != nil {
 			return fmt.Errorf("error compiling subject: %v", err)
@@ -624,9 +536,15 @@ func (c *Campaign) CompileTemplate(f template.FuncMap) error {
 
 	// Compile the base template.
 	body := c.TemplateBody
+
+	if body == "" || c.ContentType == CampaignContentTypeVisual {
+		body = `{{ template "content" . }}`
+	}
+
 	for _, r := range regTplFuncs {
 		body = r.regExp.ReplaceAllString(body, r.replace)
 	}
+
 	baseTPL, err := template.New(BaseTpl).Funcs(f).Parse(body)
 	if err != nil {
 		return fmt.Errorf("error compiling base template: %v", err)
@@ -736,15 +654,35 @@ func (m *TxMessage) Render(sub Subscriber, tpl *Template) error {
 	copy(m.Body, b.Bytes())
 	b.Reset()
 
+	// Was a subject provided in the message?
+	var (
+		subjTpl *txttpl.Template
+		subject = m.Subject
+	)
+	if subject != "" {
+		if strings.Contains(m.Subject, "{{") {
+			// If the subject has a template string, render that.
+			s, err := txttpl.New(BaseTpl).Funcs(txttpl.FuncMap(nil)).Parse(m.Subject)
+			if err != nil {
+				return fmt.Errorf("error compiling subject: %v", err)
+			}
+			subjTpl = s
+		}
+	} else {
+		// Use the subject from the template.
+		subject = tpl.Subject
+		subjTpl = tpl.SubjectTpl
+	}
+
 	// If the subject is also a template, render that.
-	if tpl.SubjectTpl != nil {
-		if err := tpl.SubjectTpl.ExecuteTemplate(&b, BaseTpl, data); err != nil {
+	if subjTpl != nil {
+		if err := subjTpl.ExecuteTemplate(&b, BaseTpl, data); err != nil {
 			return err
 		}
 		m.Subject = b.String()
 		b.Reset()
 	} else {
-		m.Subject = tpl.Subject
+		m.Subject = subject
 	}
 
 	return nil
@@ -779,7 +717,7 @@ func (s Subscriber) LastName() string {
 }
 
 // Scan implements the sql.Scanner interface.
-func (h *Headers) Scan(src interface{}) error {
+func (h *Headers) Scan(src any) error {
 	var b []byte
 	switch src := src.(type) {
 	case []byte:
@@ -813,46 +751,4 @@ func (h Headers) Value() (driver.Value, error) {
 	}
 
 	return "[]", nil
-}
-
-func (u *User) HasPerm(perm string) bool {
-	_, ok := u.PermissionsMap[perm]
-	return ok
-}
-
-// FilterListsByPerm returns list IDs filtered by either of the given perms.
-func (u *User) FilterListsByPerm(listIDs []int, get, manage bool) []int {
-	// If the user has full list management permission,
-	// no further checks are required.
-	if get {
-		if _, ok := u.PermissionsMap[PermListGetAll]; ok {
-			return listIDs
-		}
-	}
-	if manage {
-		if _, ok := u.PermissionsMap[PermListManageAll]; ok {
-			return listIDs
-		}
-	}
-
-	out := make([]int, 0, len(listIDs))
-
-	// Go through every list ID.
-	for _, id := range listIDs {
-		// Check if it exists in the map.
-		if l, ok := u.ListPermissionsMap[id]; ok {
-			// Check if any of the given permission exists for it.
-			if get {
-				if _, ok := l[PermListGet]; ok {
-					out = append(out, id)
-				}
-			} else if manage {
-				if _, ok := l[PermListManage]; ok {
-					out = append(out, id)
-				}
-			}
-		}
-	}
-
-	return out
 }

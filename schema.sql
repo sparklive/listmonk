@@ -4,9 +4,9 @@ DROP TYPE IF EXISTS subscriber_status CASCADE; CREATE TYPE subscriber_status AS 
 DROP TYPE IF EXISTS subscription_status CASCADE; CREATE TYPE subscription_status AS ENUM ('unconfirmed', 'confirmed', 'unsubscribed');
 DROP TYPE IF EXISTS campaign_status CASCADE; CREATE TYPE campaign_status AS ENUM ('draft', 'running', 'scheduled', 'paused', 'cancelled', 'finished');
 DROP TYPE IF EXISTS campaign_type CASCADE; CREATE TYPE campaign_type AS ENUM ('regular', 'optin');
-DROP TYPE IF EXISTS content_type CASCADE; CREATE TYPE content_type AS ENUM ('richtext', 'html', 'plain', 'markdown');
+DROP TYPE IF EXISTS content_type CASCADE; CREATE TYPE content_type AS ENUM ('richtext', 'html', 'plain', 'markdown', 'visual');
 DROP TYPE IF EXISTS bounce_type CASCADE; CREATE TYPE bounce_type AS ENUM ('soft', 'hard', 'complaint');
-DROP TYPE IF EXISTS template_type CASCADE; CREATE TYPE template_type AS ENUM ('campaign', 'tx');
+DROP TYPE IF EXISTS template_type CASCADE; CREATE TYPE template_type AS ENUM ('campaign', 'campaign_visual', 'tx');
 DROP TYPE IF EXISTS user_type CASCADE; CREATE TYPE user_type AS ENUM ('user', 'api');
 DROP TYPE IF EXISTS user_status CASCADE; CREATE TYPE user_status AS ENUM ('enabled', 'disabled');
 DROP TYPE IF EXISTS role_type CASCADE; CREATE TYPE role_type AS ENUM ('user', 'list');
@@ -77,6 +77,7 @@ CREATE TABLE templates (
     type            template_type NOT NULL DEFAULT 'campaign',
     subject         TEXT NOT NULL,
     body            TEXT NOT NULL,
+    body_source     TEXT NULL,
     is_default      BOOLEAN NOT NULL DEFAULT false,
 
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -94,6 +95,7 @@ CREATE TABLE campaigns (
     subject          TEXT NOT NULL,
     from_email       TEXT NOT NULL,
     body             TEXT NOT NULL,
+    body_source      TEXT NULL,
     altbody          TEXT NULL,
     content_type     content_type NOT NULL DEFAULT 'richtext',
     send_at          TIMESTAMP WITH TIME ZONE,
@@ -105,9 +107,9 @@ CREATE TABLE campaigns (
     -- For opt-in campaigns, this will be 'unsubscribed'.
     type campaign_type DEFAULT 'regular',
 
-    -- The ID of the messenger backend used to send this campaign. 
+    -- The ID of the messenger backend used to send this campaign.
     messenger        TEXT NOT NULL,
-    template_id      INTEGER REFERENCES templates(id) ON DELETE SET DEFAULT DEFAULT 1,
+    template_id      INTEGER REFERENCES templates(id) ON DELETE SET NULL,
 
     -- Progress and stats.
     to_send            INT NOT NULL DEFAULT 0,
@@ -118,7 +120,7 @@ CREATE TABLE campaigns (
     -- Publishing.
     archive             BOOLEAN NOT NULL DEFAULT false,
     archive_slug        TEXT NULL UNIQUE,
-    archive_template_id INTEGER REFERENCES templates(id) ON DELETE SET DEFAULT DEFAULT 1,
+    archive_template_id INTEGER REFERENCES templates(id) ON DELETE SET NULL,
     archive_meta        JSONB NOT NULL DEFAULT '{}',
 
     started_at       TIMESTAMP WITH TIME ZONE,
@@ -170,6 +172,7 @@ CREATE TABLE media (
     meta             JSONB NOT NULL DEFAULT '{}',
     created_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+DROP INDEX IF EXISTS idx_media_filename; CREATE INDEX idx_media_filename ON media(provider, filename);
 
 -- campaign_media
 DROP TABLE IF EXISTS campaign_media CASCADE;
@@ -238,7 +241,7 @@ INSERT INTO settings (key, value) VALUES
     ('app.enable_public_archive_rss_content', 'true'),
     ('app.send_optin_confirmation', 'true'),
     ('app.check_updates', 'true'),
-    ('app.notify_emails', '["admin1@mysite.com", "admin2@mysite.com"]'),
+    ('app.notify_emails', '[]'),
     ('app.lang', '"en"'),
     ('privacy.individual_tracking', 'false'),
     ('privacy.unsubscribe_header', 'true'),
@@ -248,11 +251,10 @@ INSERT INTO settings (key, value) VALUES
     ('privacy.allow_preferences', 'true'),
     ('privacy.exportable', '["profile", "subscriptions", "campaign_views", "link_clicks"]'),
     ('privacy.domain_blocklist', '[]'),
+    ('privacy.domain_allowlist', '[]'),
     ('privacy.record_optin_ip', 'false'),
-    ('security.enable_captcha', 'false'),
-    ('security.captcha_key', '""'),
-    ('security.captcha_secret', '""'),
-    ('security.oidc', '{"enabled": false, "provider_url": "", "client_id": "", "client_secret": ""}'),
+    ('security.captcha', '{"altcha": {"enabled": false, "complexity": 300000}, "hcaptcha": {"enabled": false, "key": "", "secret": ""}}'),
+    ('security.oidc', '{"enabled": false, "provider_url": "", "provider_name": "", "client_id": "", "client_secret": "", "auto_create_users": false, "default_user_role_id": null, "default_list_role_id": null}'),
     ('upload.provider', '"filesystem"'),
     ('upload.max_file_size', '5000'),
     ('upload.extensions', '["jpg","jpeg","png","gif","svg","*"]'),
@@ -422,9 +424,9 @@ DROP INDEX IF EXISTS mat_dashboard_charts_idx; CREATE UNIQUE INDEX mat_dashboard
 -- subscriber counts stats for lists
 DROP MATERIALIZED VIEW IF EXISTS mat_list_subscriber_stats;
 CREATE MATERIALIZED VIEW mat_list_subscriber_stats AS
-    SELECT NOW() AS updated_at, lists.id AS list_id, subscriber_lists.status, COUNT(*) AS subscriber_count FROM lists
+    SELECT NOW() AS updated_at, lists.id AS list_id, subscriber_lists.status, COUNT(subscriber_lists.status) AS subscriber_count FROM lists
     LEFT JOIN subscriber_lists ON (subscriber_lists.list_id = lists.id)
     GROUP BY lists.id, subscriber_lists.status
     UNION ALL
-    SELECT NOW() AS updated_at, 0 AS list_id, NULL AS status, COUNT(*) AS subscriber_count FROM subscribers;
+    SELECT NOW() AS updated_at, 0 AS list_id, NULL AS status, COUNT(id) AS subscriber_count FROM subscribers;
 DROP INDEX IF EXISTS mat_list_subscriber_stats_idx; CREATE UNIQUE INDEX mat_list_subscriber_stats_idx ON mat_list_subscriber_stats (list_id, status);

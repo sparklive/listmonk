@@ -3,7 +3,7 @@ package models
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
@@ -53,6 +53,7 @@ type Queries struct {
 	QueryLists      string     `query:"query-lists"`
 	GetLists        *sqlx.Stmt `query:"get-lists"`
 	GetListsByOptin *sqlx.Stmt `query:"get-lists-by-optin"`
+	GetListTypes    *sqlx.Stmt `query:"get-list-types"`
 	UpdateList      *sqlx.Stmt `query:"update-list"`
 	UpdateListsDate *sqlx.Stmt `query:"update-lists-date"`
 	DeleteLists     *sqlx.Stmt `query:"delete-lists"`
@@ -64,6 +65,7 @@ type Queries struct {
 	GetCampaignStats      *sqlx.Stmt `query:"get-campaign-stats"`
 	GetCampaignStatus     *sqlx.Stmt `query:"get-campaign-status"`
 	GetArchivedCampaigns  *sqlx.Stmt `query:"get-archived-campaigns"`
+	CampaignHasLists      *sqlx.Stmt `query:"campaign-has-lists"`
 
 	// These two queries are read as strings and based on settings.individual_tracking=on/off,
 	// are interpolated and copied to view and click counts. Same query, different tables.
@@ -104,11 +106,12 @@ type Queries struct {
 	UpdateSettings *sqlx.Stmt `query:"update-settings"`
 
 	// GetStats *sqlx.Stmt `query:"get-stats"`
-	RecordBounce              *sqlx.Stmt `query:"record-bounce"`
-	QueryBounces              string     `query:"query-bounces"`
-	DeleteBounces             *sqlx.Stmt `query:"delete-bounces"`
-	DeleteBouncesBySubscriber *sqlx.Stmt `query:"delete-bounces-by-subscriber"`
-	GetDBInfo                 string     `query:"get-db-info"`
+	RecordBounce                *sqlx.Stmt `query:"record-bounce"`
+	QueryBounces                string     `query:"query-bounces"`
+	BlocklistBouncedSubscribers *sqlx.Stmt `query:"blocklist-bounced-subscribers"`
+	DeleteBounces               *sqlx.Stmt `query:"delete-bounces"`
+	DeleteBouncesBySubscriber   *sqlx.Stmt `query:"delete-bounces-by-subscriber"`
+	GetDBInfo                   string     `query:"get-db-info"`
 
 	CreateUser        *sqlx.Stmt `query:"create-user"`
 	UpdateUser        *sqlx.Stmt `query:"update-user"`
@@ -129,35 +132,39 @@ type Queries struct {
 	DeleteListPermission  *sqlx.Stmt `query:"delete-list-permission"`
 }
 
-// CompileSubscriberQueryTpl takes an arbitrary WHERE expressions
+// compileSubscriberQueryTpl takes an arbitrary WHERE expressions
 // to filter subscribers from the subscribers table and prepares a query
 // out of it using the raw `query-subscribers-template` query template.
 // While doing this, a readonly transaction is created and the query is
 // dry run on it to ensure that it is indeed readonly.
-func (q *Queries) CompileSubscriberQueryTpl(exp string, db *sqlx.DB, subStatus string) (string, error) {
+func (q *Queries) compileSubscriberQueryTpl(searchStr, queryExp string, db *sqlx.DB, subStatus string) (string, error) {
 	tx, err := db.BeginTxx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
 
-	// Perform the dry run.
-	if exp != "" {
-		exp = " AND " + exp
+	// There's an arbitrary query condition.
+	cond := "TRUE"
+	if queryExp != "" {
+		cond = queryExp
 	}
-	stmt := fmt.Sprintf(q.QuerySubscribersTpl, exp)
-	if _, err := tx.Exec(stmt, true, pq.Int64Array{}, subStatus); err != nil {
+
+	// Perform the dry run.
+	stmt := strings.ReplaceAll(q.QuerySubscribersTpl, "%query%", cond)
+	if _, err := tx.Exec(stmt, true, pq.Int64Array{}, subStatus, searchStr); err != nil {
 		return "", err
 	}
+
 	return stmt, nil
 }
 
 // compileSubscriberQueryTpl takes an arbitrary WHERE expressions and a subscriber
 // query template that depends on the filter (eg: delete by query, blocklist by query etc.)
 // combines and executes them.
-func (q *Queries) ExecSubQueryTpl(exp, tpl string, listIDs []int, db *sqlx.DB, subStatus string, args ...interface{}) error {
+func (q *Queries) ExecSubQueryTpl(searchStr, queryExp, baseQueryTpl string, listIDs []int, db *sqlx.DB, subStatus string, args ...any) error {
 	// Perform a dry run.
-	filterExp, err := q.CompileSubscriberQueryTpl(exp, db, subStatus)
+	filterExp, err := q.compileSubscriberQueryTpl(searchStr, queryExp, db, subStatus)
 	if err != nil {
 		return err
 	}
@@ -166,9 +173,14 @@ func (q *Queries) ExecSubQueryTpl(exp, tpl string, listIDs []int, db *sqlx.DB, s
 		listIDs = []int{}
 	}
 
+	// Insert the subscriber filter query into the target query.
+	stmt := strings.ReplaceAll(baseQueryTpl, "%query%", filterExp)
+
 	// First argument is the boolean indicating if the query is a dry run.
-	a := append([]interface{}{false, pq.Array(listIDs), subStatus}, args...)
-	if _, err := db.Exec(fmt.Sprintf(tpl, filterExp), a...); err != nil {
+	a := append([]any{false, pq.Array(listIDs), subStatus, searchStr}, args...)
+
+	// Execute the query on the DB.
+	if _, err := db.Exec(stmt, a...); err != nil {
 		return err
 	}
 	return nil

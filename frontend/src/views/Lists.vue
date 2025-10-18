@@ -16,7 +16,7 @@
       </div>
     </header>
 
-    <b-table :data="lists.results" :loading="loading.lists" hoverable default-sort="createdAt" paginated
+    <b-table :data="lists.results" :loading="loading.listsFull" hoverable default-sort="createdAt" paginated
       backend-pagination pagination-position="both" @page-change="onPageChange" :current-page="queryParams.page"
       :per-page="lists.perPage" :total="lists.total" backend-sorting @sort="onSort">
       <template #top-left>
@@ -126,7 +126,7 @@
             </b-tooltip>
           </a>
 
-          <router-link v-if="$can('lists:import')" :to="{ name: 'import', query: { list_id: props.row.id } }"
+          <router-link v-if="$can('subscribers:import')" :to="{ name: 'import', query: { list_id: props.row.id } }"
             data-cy="btn-import">
             <b-tooltip :label="$t('import.title')" type="is-dark">
               <b-icon icon="file-upload-outline" size="is-small" />
@@ -142,7 +142,7 @@
         </div>
       </b-table-column>
 
-      <template #empty v-if="!loading.lists">
+      <template #empty v-if="!loading.listsFull">
         <empty-placeholder />
       </template>
     </b-table>

@@ -25,10 +25,12 @@ describe('Campaigns', () => {
     cy.wait(500);
 
     cy.get('a[data-cy=btn-attach]').click();
+    cy.get('[data-cy=btn-toggle-upload]').click();
     cy.get('input[type=file]').attachFile('example.json');
+    cy.get('form[data-cy="upload"] button').click();
     cy.get('.modal button.is-primary:eq(0)').click();
     cy.wait(500);
-    cy.get('.modal td[data-label=Name] a.link').click();
+    cy.get('.modal a.thumb-link').click();
     cy.get('button[data-cy=btn-save]').click();
     cy.wait(500);
 
@@ -42,7 +44,11 @@ describe('Campaigns', () => {
     cy.get('button[data-cy=btn-start]').click();
     cy.get('.modal button.is-primary:eq(0)').click();
     cy.wait(500);
-    cy.get('tbody tr').eq(0).get('td[data-label=Status] .tag.running');
+    cy.get('tbody tr').eq(0).within(() => {
+      cy.get('td[data-label=Status] .tag').should(($tag) => {
+        expect($tag.hasClass('running') || $tag.hasClass('finished')).to.be.true;
+      });
+    });
   });
 
   it('Edits campaign', () => {
@@ -80,7 +86,7 @@ describe('Campaigns', () => {
     cy.get('.b-tabs nav a').eq(1).click();
 
     // Switch format to plain text.
-    cy.get('label[data-cy=check-plain]').click();
+    cy.get('select[name=content_type]').select('plain');
     cy.get('.modal button.is-primary:eq(0)').click();
 
     // Enter body value.
@@ -114,6 +120,18 @@ describe('Campaigns', () => {
     cy.get('tbody td[data-label=Status] .tag.scheduled');
   });
 
+  it('Unschedules campaign', () => {
+    cy.get('td[data-label=Status] a').eq(1).click();
+    cy.wait(250);
+    cy.get('button[data-cy=btn-unschedule]').click();
+    cy.get('.modal button.is-primary:eq(0)').click();
+    cy.wait(250);
+    cy.visit('/admin/campaigns');
+
+    // Check if the status label has the inner text `Draft`.
+    cy.get('td[data-label=Status] .tag.draft').should('have.length', 1);
+  });
+
   it('Switches formats', () => {
     cy.resetDB();
     cy.loginAndVisit('/admin/campaigns');
@@ -131,14 +149,14 @@ describe('Campaigns', () => {
     cy.get('button[data-cy=btn-save]').click();
 
     formats.forEach((c) => {
-      cy.loginAndVisit('/admin/campaigns');
+      cy.visit('/admin/campaigns');
       cy.get('td[data-label=Status] a').click();
 
       // Switch to content tab.
       cy.get('.b-tabs nav a').eq(1).click();
 
       // Switch format.
-      cy.get(`label[data-cy=check-${c}]`).click();
+      cy.get('select[name=content_type]').select(c);
       cy.get('.modal button.is-primary:eq(0)').click();
 
       // Check content.
@@ -192,7 +210,7 @@ describe('Campaigns', () => {
 
   it('Adds new campaigns', () => {
     const lists = [[1], [1, 2]];
-    const cTypes = ['richtext', 'html', 'markdown', 'plain'];
+    const cTypes = ['richtext', 'html', 'markdown', 'plain', 'visual'];
 
     let n = 0;
     cTypes.forEach((c) => {
@@ -240,7 +258,7 @@ describe('Campaigns', () => {
         }(n));
 
         // Select content type.
-        cy.get(`label[data-cy=check-${c}]`).click();
+        cy.get('select[name=content_type]').select(c);
 
         // Insert content.
         const htmlBody = `<strong>hello${n}</strong> \{\{ .Subscriber.Name \}\} from {\{ .Subscriber.Attribs.city \}\}`;
@@ -255,13 +273,29 @@ describe('Campaigns', () => {
           });
           cy.wait(500);
         } else if (c === 'html') {
-          cy.get('code-flask').shadow().find('.codeflask textarea').invoke('val', htmlBody)
-            .trigger('input');
+          cy.get('[contenteditable="true"]').then(($el) => {
+            cy.window().then((win) => {
+              $el.focus();
+              win.document.execCommand('insertText', false, htmlBody);
+            });
+          });
         } else if (c === 'markdown') {
-          cy.get('code-flask').shadow().find('.codeflask textarea').invoke('val', markdownBody)
-            .trigger('input');
+          cy.get('[contenteditable="true"]').then(($el) => {
+            cy.window().then((win) => {
+              $el.focus();
+              win.document.execCommand('insertText', false, markdownBody);
+            });
+          });
         } else if (c === 'plain') {
           cy.get('textarea[name=content]').invoke('val', plainBody).trigger('input');
+        } else if (c === 'visual') {
+          cy.wait(200);
+          cy.get('iframe').then((el) => {
+            cy.wait(200);
+            cy.wrap(el.contents()).find('table td').click();
+            cy.wait(200);
+            cy.wrap(el.contents()).find('textarea').eq(0).type(plainBody);
+          });
         }
 
         // Save.
@@ -275,7 +309,12 @@ describe('Campaigns', () => {
             return;
           }
           const doc = $f.contents();
-          expect(doc.find('.wrap').text().trim()).equal(plainBody);
+
+          if (c === 'visual') {
+            expect(doc.find('td').text().trim()).equal(plainBody);
+          } else {
+            expect(doc.find('.wrap').text().trim()).equal(plainBody);
+          }
         });
 
         cy.get('.modal-card-foot button').click();
@@ -327,8 +366,8 @@ describe('Campaigns', () => {
   });
 
   it('Sorts campaigns', () => {
-    const asc = [5, 6, 7, 8, 9, 10, 11, 12];
-    const desc = [12, 11, 10, 9, 8, 7, 6, 5];
+    const asc = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+    const desc = [14, 13, 12, 11, 10, 9, 8, 7, 6, 5];
     const cases = ['cy-name', 'cy-timestamp'];
 
     cases.forEach((c) => {
